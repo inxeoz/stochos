@@ -11,3 +11,4 @@ wayland-client = "0.31.10"
 wayland-server = "0.31.9"
 wayland-protocols = "0.32.8"
 wayland-protocols-wlr = { version = "0.3.8", features = ["client", "server"] }
+smithay-client-toolkit = "0.19.2"
