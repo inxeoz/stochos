@@ -14,6 +14,10 @@ pub fn config() -> &'static Config {
     CONFIG.get().expect("config not initialized")
 }
 
+pub fn colors() -> &'static Colors {
+    &config().colors
+}
+
 /// Platform-agnostic key representation.
 /// Each backend maps its native keycodes to these values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,11 +262,109 @@ impl KeyBindings {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+///Colors stored as BGRA
+pub struct Colors {
+    #[serde(with = "from_hex")]
+    pub cell_normal: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub cell_drag: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub cell_highlight: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub text_first: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub text_second: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub text_highlight: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub text_dim: [u8; 4],
+
+    // // Sub-grid
+    #[serde(with = "from_hex")]
+    pub sub_cell_normal: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub sub_bg: [u8; 4],
+    // // Macro UI
+    #[serde(with = "from_hex")]
+    pub panel_bg: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub text_white: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub text_grey: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub selected_bg: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub rec_bg: [u8; 4],
+
+    #[serde(with = "from_hex")]
+    pub border: [u8; 4],
+    #[serde(with = "from_hex")]
+    pub border_dragging: [u8; 4],
+}
+mod from_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(color: &[u8; 4], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color[2], color[1], color[0], color[3]
+        ))
+    }
+    ///Deserialize from #RRGGBBAA  to [BB,GG,RR,AA]
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 4], D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let hex = s.trim_start_matches("#");
+        let rgba = match hex.len() {
+            6 => u32::from_str_radix(&hex, 16)
+                .map(|a| a << 8)
+                .unwrap_or_default(),
+            8 => u32::from_str_radix(&hex, 16).unwrap_or_default(),
+            _ => 0,
+        };
+        Ok([
+            ((rgba & 0x0000FF00) >> 8) as u8,
+            ((rgba & 0x00FF0000) >> 16) as u8,
+            ((rgba & 0xFF000000) >> 24) as u8,
+            (rgba & 0x000000FF) as u8,
+        ])
+    }
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Self {
+            //store in BGRA
+            cell_normal: [0x00, 0x00, 0x00, 0x66], //overlay transparency
+            cell_drag: [0x40, 0x00, 0x40, 0x88],   //dark purple
+            cell_highlight: [0x14, 0x30, 0x14, 0xAA], //dark green
+            text_first: [0x00, 0xDC, 0xFF, 0xFF],  //yellow
+            text_second: [0xFF, 0xBE, 0x50, 0xFF], //sky blue
+            text_highlight: [0x50, 0xFF, 0x50, 0xFF], //bright lime
+            text_dim: [0x66, 0x66, 0x66, 0xAA],
+
+            // // Sub-grid
+            sub_cell_normal: [0x30, 0x10, 0x00, 0xAA], //dark navy
+            sub_bg: [0x30, 0x10, 0x00, 0x99],
+
+            // // Macro UI
+            panel_bg: [0x18, 0x0C, 0x00, 0xEE], //very dark warm
+            text_white: [0xFF, 0xFF, 0xFF, 0xFF],
+            text_grey: [0x88, 0x88, 0x88, 0xFF],
+            selected_bg: [0x30, 0x50, 0x20, 0xFF], //dark green
+            rec_bg: [0x00, 0x00, 0xCC, 0xFF],
+            border: [0x00, 0xA5, 0xFF, 0xFF],          //amber
+            border_dragging: [0xFF, 0x00, 0xFF, 0xFF], //magenta
+        }
+    }
+}
+
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub grid: GridConfig,
     pub keys: KeyBindings,
+    pub colors: Colors,
 }
 
 impl Config {

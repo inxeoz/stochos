@@ -1,26 +1,8 @@
-use crate::input::{cols, hints, rows, sub_cols, sub_hints, sub_rows, InputState};
+use crate::{
+    config::colors,
+    input::{cols, hints, rows, sub_cols, sub_hints, sub_rows, InputState},
+};
 use font8x8::UnicodeFonts;
-
-// ARGB8888 — byte order on disk/in memory is [Blue, Green, Red, Alpha]
-
-// Main grid
-const CELL_NORMAL: [u8; 4] = [0x00, 0x00, 0x00, 0x66];
-const CELL_DRAG: [u8; 4] = [0x40, 0x00, 0x40, 0x88]; // dark purple
-const CELL_HIGHLIGHT: [u8; 4] = [0x14, 0x30, 0x14, 0xAA]; // dark green
-const TEXT_FIRST: [u8; 4] = [0x00, 0xDC, 0xFF, 0xFF]; // yellow  (RGB 255,220,0)
-const TEXT_SECOND: [u8; 4] = [0xFF, 0xBE, 0x50, 0xFF]; // sky-blue (RGB 80,190,255)
-const TEXT_HIGHLIGHT: [u8; 4] = [0x50, 0xFF, 0x50, 0xFF]; // bright lime
-const TEXT_DIM: [u8; 4] = [0x66, 0x66, 0x66, 0xAA];
-
-// Sub-grid
-const SUB_CELL_NORMAL: [u8; 4] = [0x30, 0x10, 0x00, 0xAA]; // dark navy
-
-// Macro UI
-const PANEL_BG: [u8; 4] = [0x18, 0x0C, 0x00, 0xEE]; // very dark, warm
-const TEXT_WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-const TEXT_GREY: [u8; 4] = [0x88, 0x88, 0x88, 0xFF];
-const SELECTED_BG: [u8; 4] = [0x30, 0x50, 0x20, 0xFF]; // dark green
-const REC_BG: [u8; 4] = [0x00, 0x00, 0xCC, 0xFF]; // red
 
 const FONT_SCALE: u32 = 2;
 const LINE_H: u32 = 24;
@@ -54,7 +36,11 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
     let char_h = 8 * FONT_SCALE;
     let gap = 3u32;
     let label_w = char_w * 2 + gap;
-    let cell_normal = if dragging { CELL_DRAG } else { CELL_NORMAL };
+    let cell_normal = if dragging {
+        colors().cell_drag
+    } else {
+        colors().cell_normal
+    };
 
     for row in 0..nrows {
         for col in 0..ncols {
@@ -64,12 +50,16 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
             let second_hint = hints[row as usize];
 
             let (cell_bg, c1, c2) = match input {
-                InputState::First => (Some(cell_normal), TEXT_FIRST, TEXT_SECOND),
+                InputState::First => (Some(cell_normal), colors().text_first, colors().text_second),
                 InputState::Second(typed) => {
                     if first_hint == *typed {
-                        (Some(CELL_HIGHLIGHT), TEXT_HIGHLIGHT, TEXT_SECOND)
+                        (
+                            Some(colors().cell_highlight),
+                            colors().text_highlight,
+                            colors().text_second,
+                        )
                     } else {
-                        (None, TEXT_DIM, TEXT_DIM)
+                        (None, colors().text_dim, colors().text_dim)
                     }
                 }
                 _ => unreachable!(),
@@ -89,37 +79,37 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
 
 pub fn render_rec_indicator(buf: &mut [u8], w: u32) {
     let mut c = Canvas { buf, w };
-    c.fill_rect(8, 8, 56, 24, REC_BG);
-    c.draw_text(12, 12, b"REC", TEXT_WHITE, 2);
+    c.fill_rect(8, 8, 56, 24, colors().rec_bg);
+    c.draw_text(12, 12, b"REC", colors().text_white, 2);
 }
 
 pub fn render_macro_bind_key(buf: &mut [u8], w: u32, h: u32) {
     let mut p = Panel::new(buf, w, h, 6);
-    p.text(b"save macro", TEXT_FIRST)
+    p.text(b"save macro", colors().text_first)
         .skip()
-        .text(b"press a key to bind", TEXT_WHITE)
-        .text(b"enter to skip binding", TEXT_GREY)
-        .text(b"escape to cancel", TEXT_GREY);
+        .text(b"press a key to bind", colors().text_white)
+        .text(b"enter to skip binding", colors().text_grey)
+        .text(b"escape to cancel", colors().text_grey);
 }
 
 pub fn render_macro_name(buf: &mut [u8], w: u32, h: u32, name: &[char], bind_key: Option<char>) {
     let mut p = Panel::new(buf, w, h, 7);
-    p.text(b"name this macro", TEXT_FIRST);
+    p.text(b"name this macro", colors().text_first);
     match bind_key {
-        Some(k) => p.text_with_char(b"bound to ", k, TEXT_GREY),
+        Some(k) => p.text_with_char(b"bound to ", k, colors().text_grey),
         None => p.skip(),
     };
-    p.input_line(name, TEXT_WHITE)
+    p.input_line(name, colors().text_white)
         .skip()
-        .text(b"enter to save", TEXT_GREY)
-        .text(b"escape to cancel", TEXT_GREY);
+        .text(b"enter to save", colors().text_grey)
+        .text(b"escape to cancel", colors().text_grey);
 }
 
 pub fn render_macro_replay_wait(buf: &mut [u8], w: u32, h: u32) {
     let mut p = Panel::new(buf, w, h, 4);
-    p.text(b"press macro key", TEXT_FIRST)
+    p.text(b"press macro key", colors().text_first)
         .skip()
-        .text(b"escape to cancel", TEXT_GREY);
+        .text(b"escape to cancel", colors().text_grey);
 }
 
 pub fn render_macro_search(
@@ -133,15 +123,16 @@ pub fn render_macro_search(
     let max_visible = 10usize;
     let visible = results.len().min(max_visible);
     let mut p = Panel::new(buf, w, h, visible as u32 + 5);
-    p.input_line(query, TEXT_WHITE).skip();
+    p.input_line(query, colors().text_white).skip();
     if results.is_empty() {
-        p.text(b"no results", TEXT_GREY);
+        p.text(b"no results", colors().text_grey);
     } else {
         for (i, (bind_key, name)) in results[..visible].iter().enumerate() {
             p.search_entry(*bind_key, name, i == selected);
         }
     }
-    p.skip().text(b"tab:next enter:select esc:back", TEXT_GREY);
+    p.skip()
+        .text(b"tab:next enter:select esc:back", colors().text_grey);
 }
 
 struct Canvas<'a> {
@@ -219,7 +210,7 @@ impl<'a> Panel<'a> {
         let panel_w = (w * 30 / 100).max(400).min(w);
         let panel_x = (w - panel_w) / 2;
         let panel_y = (h - panel_h) / 2;
-        c.fill_rect(panel_x, panel_y, panel_w, panel_h, PANEL_BG);
+        c.fill_rect(panel_x, panel_y, panel_w, panel_h, colors().panel_bg);
         Self {
             c,
             tx: panel_x + 16,
@@ -271,18 +262,26 @@ impl<'a> Panel<'a> {
                 self.ty.saturating_sub(2),
                 self.pw - 8,
                 LINE_H,
-                SELECTED_BG,
+                colors().selected_bg,
             );
         }
-        let text_color = if selected { TEXT_HIGHLIGHT } else { TEXT_WHITE };
+        let text_color = if selected {
+            colors().text_highlight
+        } else {
+            colors().text_white
+        };
         match bind_key {
             Some(k) => {
-                self.c.draw_text(self.tx, self.ty, b"[", TEXT_GREY, 2);
-                self.c.draw_glyph(self.tx + 16, self.ty, k, TEXT_GREY, 2);
                 self.c
-                    .draw_text(self.tx + 2 * 16, self.ty, b"] ", TEXT_GREY, 2);
+                    .draw_text(self.tx, self.ty, b"[", colors().text_grey, 2);
+                self.c
+                    .draw_glyph(self.tx + 16, self.ty, k, colors().text_grey, 2);
+                self.c
+                    .draw_text(self.tx + 2 * 16, self.ty, b"] ", colors().text_grey, 2);
             }
-            None => self.c.draw_text(self.tx, self.ty, b"[ ] ", TEXT_GREY, 2),
+            None => self
+                .c
+                .draw_text(self.tx, self.ty, b"[ ] ", colors().text_grey, 2),
         }
         self.c
             .draw_text(self.tx + 4 * 16, self.ty, name.as_bytes(), text_color, 2);
@@ -307,13 +306,12 @@ fn render_sub_grid(
     let cell_x = main_col * cell_w;
     let cell_y = main_row * cell_h;
 
-    const SUB_BG: [u8; 4] = [0x30, 0x10, 0x00, 0x99];
-    c.fill_rect(cell_x, cell_y, cell_w, cell_h, SUB_BG);
+    c.fill_rect(cell_x, cell_y, cell_w, cell_h, colors().sub_bg);
 
     let border = if dragging {
-        [0xFF, 0x00, 0xFF, 0xFF_u8] // magenta
+        colors().border_dragging
     } else {
-        [0x00, 0xA5, 0xFF, 0xFF_u8] // amber
+        colors().border
     };
     c.fill_rect(cell_x, cell_y, cell_w, 1, border);
     c.fill_rect(cell_x, cell_y + cell_h - 1, cell_w, 1, border);
@@ -332,9 +330,9 @@ fn render_sub_grid(
             let hint = sub_hints[(sub_row * nsub_cols + sub_col) as usize];
             let is_selected = selected == Some((sub_col, sub_row));
             let (bg, text) = if is_selected {
-                (CELL_HIGHLIGHT, TEXT_HIGHLIGHT)
+                (colors().cell_highlight, colors().text_highlight)
             } else {
-                (SUB_CELL_NORMAL, TEXT_FIRST)
+                (colors().sub_cell_normal, colors().text_first)
             };
             c.fill_rect(x + 1, y + 1, sub_cell_w - 2, sub_cell_h - 2, bg);
             c.draw_glyph(x + glyph_ox, y + glyph_oy, hint, text, 1);
