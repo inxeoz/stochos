@@ -169,6 +169,8 @@ pub struct GridConfig {
     pub hints: Vec<char>,
     pub sub_hints: Vec<char>,
     pub sub_cols: u32,
+    /// Target cell size in pixels for dynamic grid. If set (non-zero), enables dynamic sizing.
+    pub target_cell_size: Option<u32>,
 }
 
 impl Default for GridConfig {
@@ -183,6 +185,7 @@ impl Default for GridConfig {
                 'u', 'i', 'o', 'p', 'z', 'x', 'c', 'v', 'b',
             ],
             sub_cols: 5,
+            target_cell_size: None,
         }
     }
 }
@@ -386,6 +389,32 @@ impl Config {
 
     pub fn sub_rows(&self) -> u32 {
         self.grid.sub_hints.len() as u32 / self.grid.sub_cols
+    }
+
+    /// Calculate dynamic grid columns based on screen width
+    pub fn dynamic_cols(&self, screen_width: u32) -> u32 {
+        if let Some(target) = self.grid.target_cell_size {
+            if target > 0 {
+                let calculated = (screen_width / target)
+                    .max(2)
+                    .min(self.grid.hints.len() as u32);
+                return calculated;
+            }
+        }
+        self.cols()
+    }
+
+    /// Calculate dynamic grid rows based on screen height
+    pub fn dynamic_rows(&self, screen_height: u32) -> u32 {
+        if let Some(target) = self.grid.target_cell_size {
+            if target > 0 {
+                let calculated = (screen_height / target)
+                    .max(2)
+                    .min(self.grid.hints.len() as u32);
+                return calculated;
+            }
+        }
+        self.rows()
     }
 }
 
