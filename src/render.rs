@@ -1,6 +1,6 @@
 use crate::{
     config::colors,
-    input::{cols, hints, rows, sub_cols, sub_hints, sub_rows, InputState},
+    input::{dynamic_cols, dynamic_rows, hints, sub_cols, sub_hints, sub_rows, InputState},
 };
 use font8x8::UnicodeFonts;
 
@@ -28,8 +28,8 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
     }
 
     let hints = hints();
-    let ncols = cols();
-    let nrows = rows();
+    let ncols = dynamic_cols(w);
+    let nrows = dynamic_rows(h);
     let cell_w = w / ncols;
     let cell_h = h / nrows;
     let char_w = 8 * FONT_SCALE;
@@ -301,8 +301,16 @@ fn render_sub_grid(
     let nsub_cols = sub_cols();
     let nsub_rows = sub_rows();
     let sub_hints = sub_hints();
-    let cell_w = c.w / cols();
-    let cell_h = h / rows();
+    let ncols = dynamic_cols(c.w);
+    let nrows = dynamic_rows(h);
+    
+    // Early return if main_col/main_row are outside the rendered grid
+    if main_col >= ncols || main_row >= nrows {
+        return;
+    }
+    
+    let cell_w = c.w / ncols;
+    let cell_h = h / nrows;
     let cell_x = main_col * cell_w;
     let cell_y = main_row * cell_h;
 

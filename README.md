@@ -99,6 +99,7 @@ All fields are optional. Missing fields use defaults.
 hints = ["a", "s", "d", "f", "j", "k", "l", ";", "g", "h", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
 sub_hints = ["a", "s", "d", "f", "j", "k", "l", ";", "g", "h", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "z", "x", "c", "v", "b"]
 sub_cols = 5
+target_cell_size = 90  # Enable dynamic grid by setting this value
 
 [keys]
 click = "space"
@@ -112,6 +113,29 @@ scroll_left = "left"
 scroll_right = "right"
 macro_menu = "tab"
 macro_record = "`"
+
+
+
+
+[colors]
+# Grid colors - Maximum visibility in all conditions
+cell_normal = "#00000050"        # Semi-black overlay (works on light backgrounds)
+text_dim = "#ffffff30"           # Semi-white dim (slightly visible on dark)
+sub_cell_normal = "#20202080"    # Dark grey with good opacity
+sub_bg = "#20202080"             # Matches sub cell
+text_first = "#00ff88ff"         # Teal-green (good in sunlight)
+text_second = "#ff8800ff"        # Orange (high visibility)
+cell_highlight = "#00000028"     # Subtle dark tint (no color, just darkens slightly)
+text_highlight = "#ffff00ff"     # Pure yellow (maximum contrast)
+cell_drag = "#ff00ddaa"          # Hot pink (extremely visible)
+panel_bg = "#121212f5"           # Near-black (96% opaque) - creates strong contrast barrier
+text_white = "#f5f5f5ff"         # Off-white (comfortable for long reading)
+text_grey = "#b8b8b8ff"          # Light grey (maintains 4.5:1 contrast ratio)
+selected_bg = "#2196f3ff"        # Material Design Blue (works in light/dark)
+rec_bg = "#f44336ff"             # Material Design Red (urgent, visible everywhere)
+border = "#00e676ff"             # Material Green (fresh, visible)
+border_dragging = "#e91e63ff"    # Material Pink (strong attention grabber)
+
 ```
 
 ### Grid
