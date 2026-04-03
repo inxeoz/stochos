@@ -29,11 +29,11 @@
           default = stochos;
         };
 
-        apps = rec {
-          default = flake-utils.lib.mkApp {
-            drv = stochos;
-          };
-          stochos = default;
+        apps = let
+          stochosApp = flake-utils.lib.mkApp {drv = stochos;};
+        in {
+          default = stochosApp;
+          stochos = stochosApp;
         };
 
         devShells.default = craneLib.devShell {
