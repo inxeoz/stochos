@@ -78,6 +78,16 @@ pub enum Key {
     PrintScreen,
     Pause,
     ContextMenu,
+    // Modifiers (can be used as action bindings)
+    ControlLeft,
+    ControlRight,
+    AltLeft,
+    AltRight,
+    ShiftLeft,
+    ShiftRight,
+    MetaLeft,
+    MetaRight,
+    Fn,
     // Numpad
     NumPad0,
     NumPad1,
@@ -132,6 +142,15 @@ const SPECIAL_KEYS: &[(&str, Key)] = &[
     ("print_screen", Key::PrintScreen),
     ("pause", Key::Pause),
     ("context_menu", Key::ContextMenu),
+    ("control_left", Key::ControlLeft),
+    ("control_right", Key::ControlRight),
+    ("alt_left", Key::AltLeft),
+    ("alt_right", Key::AltRight),
+    ("shift_left", Key::ShiftLeft),
+    ("shift_right", Key::ShiftRight),
+    ("meta_left", Key::MetaLeft),
+    ("meta_right", Key::MetaRight),
+    ("fn", Key::Fn),
     ("num_pad_0", Key::NumPad0),
     ("num_pad_1", Key::NumPad1),
     ("num_pad_2", Key::NumPad2),
@@ -213,7 +232,10 @@ pub struct KeyBindings {
     pub click: Key,
     pub double_click: Key,
     pub close: Key,
+    #[serde(alias = "undoButton", alias = "undo_button")]
     pub undo: Key,
+    #[serde(alias = "backButton")]
+    pub back_button: Option<Key>,
     pub macro_menu: Key,
     pub macro_record: Key,
     pub right_click: Key,
@@ -230,6 +252,7 @@ impl Default for KeyBindings {
             double_click: Key::Enter,
             close: Key::Escape,
             undo: Key::Backspace,
+            back_button: None,
             macro_menu: Key::Tab,
             macro_record: Key::Char('`'),
             right_click: Key::Delete,
@@ -253,6 +276,9 @@ impl KeyBindings {
         }
         if key == self.close {
             return Some(KeyEvent::Close);
+        }
+        if self.back_button == Some(key) {
+            return Some(KeyEvent::Back);
         }
         if key == self.undo {
             return Some(KeyEvent::Undo);
@@ -279,6 +305,30 @@ impl KeyBindings {
             return Some(KeyEvent::ScrollRight);
         }
         None
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScrollConfig {
+    pub repeat_delay_ms: u64,
+    pub repeat_rate: u32,
+    pub repeat_burst_ms: u64,
+    pub enable_acceleration: bool,
+    pub acceleration_time_seconds: f64,
+    pub initial_speed_multiplier: f64,
+}
+
+impl Default for ScrollConfig {
+    fn default() -> Self {
+        Self {
+            repeat_delay_ms: 550,
+            repeat_rate: 10,
+            repeat_burst_ms: 900,
+            enable_acceleration: true,
+            acceleration_time_seconds: 0.3,
+            initial_speed_multiplier: 0.4,
+        }
     }
 }
 
@@ -384,6 +434,7 @@ impl Default for Colors {
 pub struct Config {
     pub grid: GridConfig,
     pub keys: KeyBindings,
+    pub scroll: ScrollConfig,
     pub colors: Colors,
     pub font_size: u32,
     pub sub_hint_font_size: Option<u32>,
@@ -395,6 +446,7 @@ impl Default for Config {
         Self {
             grid: GridConfig::default(),
             keys: KeyBindings::default(),
+            scroll: ScrollConfig::default(),
             colors: Colors::default(),
             font_size: 2,
             sub_hint_font_size: None,

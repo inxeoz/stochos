@@ -18,7 +18,7 @@ use wayland_protocols_wlr::{
 
 use anyhow::{Context, Result};
 
-use super::{Backend, KeyEvent};
+use super::{Backend, KeyEvent, ScrollRepeat};
 use crate::config::{config, Key};
 
 const BTN_LEFT: u32 = 0x110;
@@ -40,7 +40,6 @@ impl WaylandBackend {
         let qh = eq.handle();
 
         conn.display().get_registry(&qh, ());
-
         let mut state = WaylandState {
             conn,
             compositor: None,
@@ -55,8 +54,11 @@ impl WaylandBackend {
             screen_h: 0,
             configured: false,
             pending_key: None,
+            scroll_repeat: ScrollRepeat::from_config(&config().scroll),
+            suppress_surface_close: false,
             shift_held: false,
             current_output: None,
+            last_pointer_pos: None,
         };
 
         eq.roundtrip(&mut state).context("initial roundtrip")?;
@@ -90,7 +92,11 @@ impl WaylandBackend {
     fn scroll(&mut self, axis: Axis, value: f64, discrete: i32) -> Result<()> {
         self.teardown_surface()?;
 
-        if let Some(vp) = &self.state.vp {
+        if let Some(vp) = self.state.vp.as_ref().cloned() {
+            self.state.apply_last_pointer_pos(&vp)?;
+            self.eq
+                .roundtrip(&mut self.state)
+                .context("roundtrip after scroll target motion")?;
             // axis_source identifies this as a wheel, not touchpad continuous scroll.
             // axis_discrete sends both the continuous value and the notch count —
             // bare axis() alone is often ignored by compositors expecting wheel events.
@@ -104,6 +110,9 @@ impl WaylandBackend {
     }
 
     fn teardown_surface(&mut self) -> Result<()> {
+        if self.state.layer_surface.is_some() || self.state.surface.is_some() {
+            self.state.suppress_surface_close = true;
+        }
         if let Some(ls) = self.state.layer_surface.take() {
             ls.destroy();
         }
@@ -152,6 +161,7 @@ impl Backend for WaylandBackend {
     }
 
     fn move_mouse(&mut self, x: u32, y: u32) -> Result<()> {
+        self.state.last_pointer_pos = Some((x, y));
         if let Some(vp) = &self.state.vp {
             vp.motion_absolute(timestamp(), x, y, self.state.screen_w, self.state.screen_h);
             vp.frame();
@@ -317,12 +327,49 @@ impl Backend for WaylandBackend {
                 self.ensure_vp();
                 return Ok(Some(key));
             }
+            if let Some(key) = self.state.scroll_repeat.take_due() {
+                self.ensure_vp();
+                return Ok(Some(key));
+            }
             if self.state.surface.is_none() {
                 return Ok(None);
             }
             self.eq
-                .blocking_dispatch(&mut self.state)
-                .context("blocking_dispatch")?;
+                .dispatch_pending(&mut self.state)
+                .context("dispatch_pending")?;
+
+            if self.state.pending_key.is_some() {
+                continue;
+            }
+
+            self.state.conn.flush().context("flush before poll")?;
+
+            if let Some(guard) = self.state.conn.prepare_read() {
+                let fd = guard.connection_fd();
+                let mut fds = [rustix::event::PollFd::new(
+                    &fd,
+                    rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
+                )];
+                let timeout = self
+                    .state
+                    .scroll_repeat
+                    .timeout()
+                    .map(rustix::event::Timespec::try_from)
+                    .transpose()
+                    .context("repeat timeout overflow")?;
+
+                loop {
+                    match rustix::event::poll(&mut fds, timeout.as_ref()) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            guard.read().context("read Wayland events")?;
+                            break;
+                        }
+                        Err(rustix::io::Errno::INTR) => continue,
+                        Err(err) => return Err(err).context("poll Wayland fd"),
+                    }
+                }
+            }
         }
     }
 }
@@ -343,8 +390,11 @@ struct WaylandState {
     screen_h: u32,
     configured: bool,
     pending_key: Option<KeyEvent>,
+    scroll_repeat: ScrollRepeat<u32>,
+    suppress_surface_close: bool,
     shift_held: bool,
     current_output: Option<wl_output::WlOutput>,
+    last_pointer_pos: Option<(u32, u32)>,
 }
 
 impl WaylandState {
@@ -356,6 +406,7 @@ impl WaylandState {
             .expect("zwlr_layer_shell_v1 missing");
 
         let surface = compositor.create_surface(qh, ());
+        let input_region = compositor.create_region(qh, ());
         let layer_surface = layer_shell.get_layer_surface(
             &surface,
             None,
@@ -375,11 +426,26 @@ impl WaylandState {
         layer_surface.set_exclusive_zone(-1);
         layer_surface
             .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
+        // Keep the overlay visible but pointer-transparent so virtual pointer
+        // actions apply to the window underneath instead of the overlay itself.
+        surface.set_input_region(Some(&input_region));
+        input_region.destroy();
 
         surface.commit();
 
         self.surface = Some(surface);
         self.layer_surface = Some(layer_surface);
+    }
+
+    fn apply_last_pointer_pos(
+        &self,
+        vp: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+    ) -> Result<()> {
+        if let Some((x, y)) = self.last_pointer_pos {
+            vp.motion_absolute(timestamp(), x, y, self.screen_w, self.screen_h);
+            vp.frame();
+        }
+        Ok(())
     }
 }
 
@@ -454,31 +520,43 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_keyboard::Event::Key {
-            key,
-            state: WEnum::Value(key_state),
-            ..
-        } = event
-        {
-            match key_state {
-                wl_keyboard::KeyState::Pressed => match key {
-                    42 | 54 => state.shift_held = true,
-                    _ => {
-                        state.pending_key = keycode_to_key(key, state.shift_held).and_then(|k| {
-                            config().keys.to_event(k).or(match k {
-                                Key::Char(c) => Some(KeyEvent::Char(c)),
-                                _ => None,
-                            })
-                        });
+        match event {
+            wl_keyboard::Event::Key {
+                key,
+                state: WEnum::Value(key_state),
+                ..
+            } => match key_state {
+                wl_keyboard::KeyState::Pressed => {
+                    // Track modifier state
+                    match key {
+                        42 | 54 => state.shift_held = true,
+                        _ => {}
                     }
-                },
-                wl_keyboard::KeyState::Released => {
-                    if key == 42 || key == 54 {
-                        state.shift_held = false;
+                    // Process ALL keys (including modifiers) for binding
+                    if let Some(k) = keycode_to_key(key, state.shift_held) {
+                        let event = super::key_to_event(k);
+                        state.pending_key = event;
+                        if let Some(event) = event {
+                            state.scroll_repeat.schedule(key, event);
+                        } else {
+                            state.scroll_repeat = ScrollRepeat::from_config(&config().scroll);
+                        }
                     }
                 }
+                wl_keyboard::KeyState::Released => {
+                    match key {
+                        42 | 54 => state.shift_held = false,
+                        _ => {}
+                    }
+                    state.scroll_repeat.clear(key);
+                }
                 _ => {}
+            },
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                state.scroll_repeat.update_rate(rate.max(0) as u32);
+                state.scroll_repeat.update_delay(delay.max(0) as u64);
             }
+            _ => {}
         }
     }
 }
@@ -506,7 +584,12 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandState {
                 state.configured = true;
             }
             zwlr_layer_surface_v1::Event::Closed => {
-                state.pending_key = Some(KeyEvent::Close);
+                state.scroll_repeat = ScrollRepeat::from_config(&config().scroll);
+                if state.suppress_surface_close {
+                    state.suppress_surface_close = false;
+                } else {
+                    state.pending_key = Some(KeyEvent::Close);
+                }
             }
             _ => {}
         }
@@ -548,174 +631,5 @@ fn timestamp() -> u32 {
 
 /// Maps a Wayland key code to a platform-agnostic Key.
 fn keycode_to_key(kc: u32, shift_held: bool) -> Option<Key> {
-    // Special (non-character) keys — checked first, unaffected by shift
-    match kc {
-        1 => return Some(Key::Escape),
-        14 => return Some(Key::Backspace),
-        15 => return Some(Key::Tab),
-        28 => return Some(Key::Enter),
-        57 => return Some(Key::Space),
-        // Navigation
-        102 => return Some(Key::Home),
-        103 => return Some(Key::End),
-        104 => return Some(Key::Up),
-        105 => return Some(Key::Left),
-        106 => return Some(Key::Right),
-        107 => return Some(Key::PageUp),
-        108 => return Some(Key::PageDown),
-        109 => return Some(Key::Down),
-        110 => return Some(Key::Insert),
-        111 => return Some(Key::Delete),
-        // Function keys
-        59 => return Some(Key::F1),
-        60 => return Some(Key::F2),
-        61 => return Some(Key::F3),
-        62 => return Some(Key::F4),
-        63 => return Some(Key::F5),
-        64 => return Some(Key::F6),
-        65 => return Some(Key::F7),
-        66 => return Some(Key::F8),
-        67 => return Some(Key::F9),
-        68 => return Some(Key::F10),
-        87 => return Some(Key::F11),
-        88 => return Some(Key::F12),
-        // Lock / toggle
-        58 => return Some(Key::CapsLock),
-        69 => return Some(Key::NumLock),
-        70 => return Some(Key::ScrollLock),
-        // System
-        99 => return Some(Key::PrintScreen),
-        119 => return Some(Key::Pause),
-        127 => return Some(Key::ContextMenu),
-        // Numpad
-        82 => return Some(Key::NumPad0),
-        79 => return Some(Key::NumPad1),
-        80 => return Some(Key::NumPad2),
-        81 => return Some(Key::NumPad3),
-        75 => return Some(Key::NumPad4),
-        76 => return Some(Key::NumPad5),
-        77 => return Some(Key::NumPad6),
-        71 => return Some(Key::NumPad7),
-        72 => return Some(Key::NumPad8),
-        73 => return Some(Key::NumPad9),
-        78 => return Some(Key::NumPadAdd),
-        74 => return Some(Key::NumPadSubtract),
-        55 => return Some(Key::NumPadMultiply),
-        98 => return Some(Key::NumPadDivide),
-        83 => return Some(Key::NumPadDecimal),
-        96 => return Some(Key::NumPadEnter),
-        _ => {}
-    }
-
-    // Character keys — shift changes the produced character
-    let ch = if shift_held {
-        match kc {
-            // Shifted digits → symbols
-            2 => '!',
-            3 => '@',
-            4 => '#',
-            5 => '$',
-            6 => '%',
-            7 => '^',
-            8 => '&',
-            9 => '*',
-            10 => '(',
-            11 => ')',
-            // Shifted punctuation
-            12 => '_',
-            13 => '+',
-            26 => '{',
-            27 => '}',
-            43 => '|',
-            39 => ':',
-            40 => '"',
-            51 => '<',
-            52 => '>',
-            53 => '?',
-            41 => '~',
-            // Shifted letters → uppercase
-            16 => 'Q',
-            17 => 'W',
-            18 => 'E',
-            19 => 'R',
-            20 => 'T',
-            21 => 'Y',
-            22 => 'U',
-            23 => 'I',
-            24 => 'O',
-            25 => 'P',
-            30 => 'A',
-            31 => 'S',
-            32 => 'D',
-            33 => 'F',
-            34 => 'G',
-            35 => 'H',
-            36 => 'J',
-            37 => 'K',
-            38 => 'L',
-            44 => 'Z',
-            45 => 'X',
-            46 => 'C',
-            47 => 'V',
-            48 => 'B',
-            49 => 'N',
-            50 => 'M',
-            _ => return None,
-        }
-    } else {
-        match kc {
-            // Digits
-            2 => '1',
-            3 => '2',
-            4 => '3',
-            5 => '4',
-            6 => '5',
-            7 => '6',
-            8 => '7',
-            9 => '8',
-            10 => '9',
-            11 => '0',
-            // Punctuation
-            12 => '-',
-            13 => '=',
-            26 => '[',
-            27 => ']',
-            43 => '\\',
-            39 => ';',
-            40 => '\'',
-            51 => ',',
-            52 => '.',
-            53 => '/',
-            41 => '`',
-            // Letters
-            16 => 'q',
-            17 => 'w',
-            18 => 'e',
-            19 => 'r',
-            20 => 't',
-            21 => 'y',
-            22 => 'u',
-            23 => 'i',
-            24 => 'o',
-            25 => 'p',
-            30 => 'a',
-            31 => 's',
-            32 => 'd',
-            33 => 'f',
-            34 => 'g',
-            35 => 'h',
-            36 => 'j',
-            37 => 'k',
-            38 => 'l',
-            44 => 'z',
-            45 => 'x',
-            46 => 'c',
-            47 => 'v',
-            48 => 'b',
-            49 => 'n',
-            50 => 'm',
-            _ => return None,
-        }
-    };
-    Some(Key::Char(ch))
+    super::keymap::keycode_to_key(kc, shift_held)
 }

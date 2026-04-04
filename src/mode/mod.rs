@@ -7,7 +7,9 @@ mod recording;
 
 use crate::{
     backend::{Backend, KeyEvent},
-    input::{keys_to_pos, InputState},
+    input::{
+        dynamic_cols, dynamic_rows, keys_to_pos, InputState, sub_cols, sub_rows,
+    },
     macro_store::{MacroAction, MacroStore},
     render::{render_grid, render_rec_indicator},
 };
@@ -151,6 +153,150 @@ impl Mode {
                 macro_store,
             ),
         }
+    }
+}
+
+pub(super) fn column_center(width: u32, height: u32, col: u32) -> Option<(u32, u32)> {
+    let ncols = dynamic_cols(width);
+    if col >= ncols {
+        return None;
+    }
+    let cell_w = width / ncols;
+    Some((col * cell_w + cell_w / 2, height / 2))
+}
+
+pub(super) fn main_cell_center(
+    width: u32,
+    height: u32,
+    col: u32,
+    row: u32,
+) -> Option<(u32, u32)> {
+    let ncols = dynamic_cols(width);
+    let nrows = dynamic_rows(height);
+    if col >= ncols || row >= nrows {
+        return None;
+    }
+    let cell_w = width / ncols;
+    let cell_h = height / nrows;
+    Some((col * cell_w + cell_w / 2, row * cell_h + cell_h / 2))
+}
+
+pub(super) fn sub_cell_center(
+    width: u32,
+    height: u32,
+    col: u32,
+    row: u32,
+    sub_col: u32,
+    sub_row: u32,
+) -> Option<(u32, u32)> {
+    let ncols = dynamic_cols(width);
+    let nrows = dynamic_rows(height);
+    if col >= ncols || row >= nrows {
+        return None;
+    }
+    if sub_col >= sub_cols() || sub_row >= sub_rows() {
+        return None;
+    }
+    let cell_w = width / ncols;
+    let cell_h = height / nrows;
+    let sub_cell_w = cell_w / sub_cols();
+    let sub_cell_h = cell_h / sub_rows();
+    Some((
+        col * cell_w + sub_col * sub_cell_w + sub_cell_w / 2,
+        row * cell_h + sub_row * sub_cell_h + sub_cell_h / 2,
+    ))
+}
+
+pub(super) fn handle_char_input<B: Backend>(
+    width: u32,
+    height: u32,
+    backend: &mut B,
+    input_state: &InputState,
+    ch: char,
+    target: Option<(u32, u32)>,
+    drag_origin: Option<(u32, u32)>,
+    debug_prefix: &str,
+) -> anyhow::Result<(InputState, Option<(u32, u32)>)> {
+    use crate::input::hints;
+    use crate::input::sub_hints;
+    use crate::input::sub_cols;
+
+    match input_state {
+        InputState::First => {
+            let col = hints().iter().position(|c| *c == ch).unwrap_or(0) as u32;
+            let ncols = dynamic_cols(width);
+            if col < ncols {
+                let cell_w = width / ncols;
+                let cx = col * cell_w + cell_w / 2;
+                let cy = height / 2;
+                eprintln!(
+                    "[debug] action: {} first hint key '{}' selected column {} center=({}, {})",
+                    debug_prefix, ch, col, cx, cy
+                );
+                backend.move_mouse(cx, cy)?;
+                Ok((InputState::Second(ch), Some((cx, cy))))
+            } else {
+                eprintln!("[debug] action: {} first hint key '{}'", debug_prefix, ch);
+                Ok((InputState::Second(ch), target))
+            }
+        }
+        InputState::Second(first) => {
+            let col = hints().iter().position(|c| *c == *first).unwrap_or(0) as u32;
+            let row = hints().iter().position(|c| *c == ch).unwrap_or(0) as u32;
+            let ncols = dynamic_cols(width);
+            let nrows = dynamic_rows(height);
+
+            // Reject if outside the currently rendered grid
+            if col >= ncols || row >= nrows {
+                eprintln!(
+                    "[debug] action: {} second hint '{}' ignored, grid position out of bounds",
+                    debug_prefix, ch
+                );
+                return Ok((input_state.clone(), target));
+            }
+
+            let cell_w = width / ncols;
+            let cell_h = height / nrows;
+            let cx = col * cell_w + cell_w / 2;
+            let cy = row * cell_h + cell_h / 2;
+
+            eprintln!("[debug] action: {} move_mouse to main cell ({}, {})", debug_prefix, cx, cy);
+            backend.move_mouse(cx, cy)?;
+
+            Ok((InputState::SubFirst { col, row }, Some((cx, cy))))
+        }
+        InputState::SubFirst { col, row } => {
+            if let Some(idx) = sub_hints().iter().position(|c| *c == ch) {
+                let sub_col = idx as u32 % sub_cols();
+                let sub_row = idx as u32 / sub_cols();
+                if let Some((cx, cy)) = sub_cell_center(
+                    width,
+                    height,
+                    *col,
+                    *row,
+                    sub_col,
+                    sub_row,
+                ) {
+                    eprintln!(
+                        "[debug] action: {} move_mouse to sub cell ({}, {})",
+                        debug_prefix, cx, cy
+                    );
+                    backend.move_mouse(cx, cy)?;
+
+                    return Ok((
+                        InputState::Ready {
+                            col: *col,
+                            row: *row,
+                            sub_col,
+                            sub_row,
+                        },
+                        Some((cx, cy)),
+                    ));
+                }
+            }
+            Ok((input_state.clone(), target))
+        }
+        InputState::Ready { .. } => Ok((input_state.clone(), target)),
     }
 }
 

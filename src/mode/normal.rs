@@ -1,9 +1,9 @@
-use super::Mode;
+use super::{column_center, main_cell_center, Mode};
 use anyhow::Ok;
 
 use crate::{
     backend::{Backend, KeyEvent},
-    input::{dynamic_cols, dynamic_rows, hints, sub_cols, sub_hints, sub_rows, InputState},
+    input::{hints, sub_hints, InputState},
     macro_store::MacroAction,
     mode::{draw_grid, ModeTransition},
 };
@@ -18,31 +18,90 @@ pub(super) fn handle_key<B: Backend>(
     drag_origin: Option<(u32, u32)>,
 ) -> anyhow::Result<ModeTransition> {
     match key {
-        KeyEvent::Close => Ok(ModeTransition::Exit),
-        KeyEvent::Undo => Ok(ModeTransition::Back),
+        KeyEvent::Close => {
+            eprintln!("[debug] action: exit overlay");
+            Ok(ModeTransition::Exit)
+        }
+        KeyEvent::Back => {
+            eprintln!("[debug] action: back within selection");
+            match input_state {
+                InputState::First => Ok(ModeTransition::Stay),
+                InputState::Second(_) => Ok(ModeTransition::Enter(Mode::Normal {
+                    input_state: InputState::First,
+                    target: None,
+                    drag_origin,
+                })),
+                InputState::SubFirst { col, .. } => {
+                    let target = column_center(width, height, *col);
+                    if let Some((x, y)) = target {
+                        backend.move_mouse(x, y)?;
+                    }
+                    Ok(ModeTransition::Enter(Mode::Normal {
+                        input_state: InputState::Second(hints()[*col as usize]),
+                        target,
+                        drag_origin,
+                    }))
+                }
+                InputState::Ready { col, row, .. } => {
+                    let target = main_cell_center(width, height, *col, *row);
+                    if let Some((x, y)) = target {
+                        backend.move_mouse(x, y)?;
+                    }
+                    Ok(ModeTransition::Enter(Mode::Normal {
+                        input_state: InputState::SubFirst {
+                            col: *col,
+                            row: *row,
+                        },
+                        target,
+                        drag_origin,
+                    }))
+                }
+            }
+        }
+        KeyEvent::Undo => {
+            eprintln!("[debug] action: undo/back stack");
+            Ok(ModeTransition::Back)
+        }
         KeyEvent::Click => {
             if let Some((x, y)) = target {
                 if let Some((ox, oy)) = drag_origin {
+                    eprintln!(
+                        "[debug] action: drag_select from ({}, {}) to ({}, {})",
+                        ox, oy, x, y
+                    );
                     backend.drag_select(ox, oy, x, y)?;
                 } else {
+                    eprintln!("[debug] action: click at ({}, {})", x, y);
                     backend.click(x, y)?;
                 }
+            } else {
+                eprintln!("[debug] action: click ignored, no target");
             }
             Ok(ModeTransition::Exit)
         }
         KeyEvent::DoubleClick => {
             if let Some((x, y)) = target {
                 if let Some((ox, oy)) = drag_origin {
+                    eprintln!(
+                        "[debug] action: drag_select from ({}, {}) to ({}, {})",
+                        ox, oy, x, y
+                    );
                     backend.drag_select(ox, oy, x, y)?;
                 } else {
+                    eprintln!("[debug] action: double_click at ({}, {})", x, y);
                     backend.double_click(x, y)?;
                 }
+            } else {
+                eprintln!("[debug] action: double_click ignored, no target");
             }
             Ok(ModeTransition::Exit)
         }
         KeyEvent::RightClick if drag_origin.is_none() => {
             if let Some((x, y)) = target {
+                eprintln!("[debug] action: right_click at ({}, {})", x, y);
                 backend.right_click(x, y)?;
+            } else {
+                eprintln!("[debug] action: right_click ignored, no target");
             }
             Ok(ModeTransition::Exit)
         }
@@ -52,6 +111,7 @@ pub(super) fn handle_key<B: Backend>(
                 InputState::Ready { .. } | InputState::SubFirst { .. }
             ) =>
         {
+            eprintln!("[debug] action: enter drag mode");
             Ok(ModeTransition::Enter(Mode::Normal {
                 input_state: InputState::First,
                 target: None,
@@ -61,11 +121,13 @@ pub(super) fn handle_key<B: Backend>(
         KeyEvent::Char('@')
             if matches!(input_state, InputState::First) && drag_origin.is_none() =>
         {
+            eprintln!("[debug] action: open macro replay wait");
             Ok(ModeTransition::Enter(Mode::MacroReplayWait))
         }
         KeyEvent::MacroRecord
             if matches!(input_state, InputState::First) && drag_origin.is_none() =>
         {
+            eprintln!("[debug] action: start macro recording");
             Ok(ModeTransition::Enter(Mode::MacroRecording {
                 input_state: InputState::First,
                 target: None,
@@ -79,66 +141,14 @@ pub(super) fn handle_key<B: Backend>(
                 || (matches!(input_state, InputState::SubFirst { .. })
                     && sub_hints().contains(ch)) =>
         {
-            match input_state {
-                InputState::First => Ok(ModeTransition::Enter(Mode::Normal {
-                    input_state: InputState::Second(*ch),
-                    target,
-                    drag_origin,
-                })),
-                InputState::Second(first) => {
-                    let col = hints().iter().position(|c| c == first).unwrap_or(0) as u32;
-                    let row = hints().iter().position(|c| c == ch).unwrap_or(0) as u32;
-                    let ncols = dynamic_cols(width);
-                    let nrows = dynamic_rows(height);
-
-                    // Reject if outside the currently rendered grid
-                    if col >= ncols || row >= nrows {
-                        return Ok(ModeTransition::Stay);
-                    }
-
-                    let cell_w = width / ncols;
-                    let cell_h = height / nrows;
-                    let cx = col * cell_w + cell_w / 2;
-                    let cy = row * cell_h + cell_h / 2;
-
-                    backend.move_mouse(cx, cy)?;
-
-                    Ok(ModeTransition::Enter(Mode::Normal {
-                        input_state: InputState::SubFirst { col, row },
-                        target: Some((cx, cy)),
-                        drag_origin,
-                    }))
-                }
-                InputState::SubFirst { col, row } => {
-                    if let Some(idx) = sub_hints().iter().position(|c| c == ch) {
-                        let sub_col = idx as u32 % sub_cols();
-                        let sub_row = idx as u32 / sub_cols();
-                        let ncols = dynamic_cols(width);
-                        let nrows = dynamic_rows(height);
-                        let cell_w = width / ncols;
-                        let cell_h = height / nrows;
-                        let sub_cell_w = cell_w / sub_cols();
-                        let sub_cell_h = cell_h / sub_rows();
-                        let cx = col * cell_w + sub_col * sub_cell_w + sub_cell_w / 2;
-                        let cy = row * cell_h + sub_row * sub_cell_h + sub_cell_h / 2;
-
-                        backend.move_mouse(cx, cy)?;
-
-                        return Ok(ModeTransition::Enter(Mode::Normal {
-                            input_state: InputState::Ready {
-                                col: *col,
-                                row: *row,
-                                sub_col,
-                                sub_row,
-                            },
-                            target: Some((cx, cy)),
-                            drag_origin,
-                        }));
-                    }
-                    Ok(ModeTransition::Stay)
-                }
-                InputState::Ready { .. } => Ok(ModeTransition::Stay),
-            }
+            let (new_input_state, new_target) = crate::mode::handle_char_input(
+                width, height, backend, input_state, *ch, target, drag_origin, "",
+            )?;
+            Ok(ModeTransition::Enter(Mode::Normal {
+                input_state: new_input_state,
+                target: new_target,
+                drag_origin,
+            }))
         }
         KeyEvent::MacroMenu
             if matches!(
@@ -146,6 +156,7 @@ pub(super) fn handle_key<B: Backend>(
                 InputState::SubFirst { .. } | InputState::Ready { .. }
             ) =>
         {
+            eprintln!("[debug] action: open macro bind key menu");
             Ok(ModeTransition::Enter(Mode::MacroBindKey {
                 actions: vec![MacroAction::Click(input_state.keys())],
             }))
@@ -153,24 +164,57 @@ pub(super) fn handle_key<B: Backend>(
         KeyEvent::MacroMenu
             if matches!(input_state, InputState::First) && drag_origin.is_none() =>
         {
+            eprintln!("[debug] action: open macro search");
             Ok(ModeTransition::Enter(Mode::MacroSearch {
                 query: Vec::new(),
                 selected: 0,
             }))
         }
         KeyEvent::ScrollUp => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: move_mouse to scroll target ({}, {}) before scroll_up",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: scroll_up");
             backend.scroll_up()?;
             Ok(ModeTransition::Redraw)
         }
         KeyEvent::ScrollDown => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: move_mouse to scroll target ({}, {}) before scroll_down",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: scroll_down");
             backend.scroll_down()?;
             Ok(ModeTransition::Redraw)
         }
         KeyEvent::ScrollLeft => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: move_mouse to scroll target ({}, {}) before scroll_left",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: scroll_left");
             backend.scroll_left()?;
             Ok(ModeTransition::Redraw)
         }
         KeyEvent::ScrollRight => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: move_mouse to scroll target ({}, {}) before scroll_right",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: scroll_right");
             backend.scroll_right()?;
             Ok(ModeTransition::Redraw)
         }

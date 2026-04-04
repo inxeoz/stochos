@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::time::Duration;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::xtest::{self, ConnectionExt as _};
@@ -7,7 +8,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::CURRENT_TIME;
 
-use super::{Backend, KeyEvent};
+use super::{Backend, KeyEvent, ScrollRepeat};
 use crate::config::{config, Key};
 
 const BTN_LEFT: u8 = 1;
@@ -26,6 +27,9 @@ pub struct X11Backend {
     screen_h: u32,
     depth: u8,
     mapped: bool,
+    pending_key: Option<KeyEvent>,
+    scroll_repeat: ScrollRepeat<u8>,
+    last_pointer_pos: Option<(u32, u32)>,
     shift_held: bool,
     /// Screenshot of the desktop captured before mapping the overlay.
     /// Used to alpha-blend the overlay on top (X11 has no compositor).
@@ -106,6 +110,9 @@ impl X11Backend {
             screen_h,
             depth,
             mapped: true,
+            pending_key: None,
+            scroll_repeat: ScrollRepeat::from_config(&config().scroll),
+            last_pointer_pos: None,
             shift_held: false,
             background,
         })
@@ -166,11 +173,52 @@ impl X11Backend {
 
     fn scroll(&mut self, button: u8) -> Result<()> {
         self.teardown()?;
+        if let Some((x, y)) = self.last_pointer_pos {
+            self.warp_and_sync(x, y)?;
+        }
         self.fake_button_click(button)?;
         // Give the underlying app time to process the scroll and redraw
         // before we recapture the background.
         std::thread::sleep(std::time::Duration::from_millis(50));
         self.reopen()
+    }
+
+    fn handle_event(&mut self, event: Event) -> Result<()> {
+        match event {
+            Event::KeyPress(ev) => {
+                let keycode = ev.detail;
+                match keycode {
+                    50 | 62 => self.shift_held = true,
+                    _ => {}
+                }
+
+                let evdev_kc = (keycode as u32).wrapping_sub(8);
+                if let Some(k) = keycode_to_key(evdev_kc, self.shift_held) {
+                    let event = super::key_to_event(k);
+
+                    if let Some(event) = event {
+                        let repeating_same_key = self.scroll_repeat.is_same_key(keycode, event);
+                        if !repeating_same_key {
+                            self.pending_key = Some(event);
+                        }
+                        self.scroll_repeat.schedule(keycode, event);
+                    } else {
+                        self.pending_key = Some(KeyEvent::Close);
+                        self.scroll_repeat = ScrollRepeat::from_config(&config().scroll);
+                    }
+                }
+            }
+            Event::KeyRelease(ev) => {
+                let keycode = ev.detail;
+                match keycode {
+                    50 | 62 => self.shift_held = false,
+                    _ => {}
+                }
+                self.scroll_repeat.clear(keycode);
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -232,6 +280,7 @@ impl Backend for X11Backend {
     }
 
     fn move_mouse(&mut self, x: u32, y: u32) -> Result<()> {
+        self.last_pointer_pos = Some((x, y));
         self.warp_and_sync(x, y)
     }
 
@@ -328,36 +377,25 @@ impl Backend for X11Backend {
         }
 
         loop {
-            let event = self.conn.wait_for_event().context("wait for event")?;
-            match event {
-                Event::KeyPress(ev) => {
-                    let keycode = ev.detail;
-                    // Shift keys (left=50, right=62 in X11 keycodes)
-                    if keycode == 50 || keycode == 62 {
-                        self.shift_held = true;
-                        continue;
-                    }
-                    // X11 keycodes are evdev + 8
-                    let evdev_kc = (keycode as u32).wrapping_sub(8);
-                    if let Some(key_event) =
-                        keycode_to_key(evdev_kc, self.shift_held).and_then(|k| {
-                            config().keys.to_event(k).or(match k {
-                                Key::Char(c) => Some(KeyEvent::Char(c)),
-                                _ => None,
-                            })
-                        })
-                    {
-                        return Ok(Some(key_event));
-                    }
-                }
-                Event::KeyRelease(ev) => {
-                    let keycode = ev.detail;
-                    if keycode == 50 || keycode == 62 {
-                        self.shift_held = false;
-                    }
-                }
-                _ => {}
+            if let Some(key) = self.pending_key.take() {
+                return Ok(Some(key));
             }
+            if let Some(key) = self.scroll_repeat.take_due() {
+                return Ok(Some(key));
+            }
+
+            if let Some(event) = self.conn.poll_for_event().context("poll for event")? {
+                self.handle_event(event)?;
+                continue;
+            }
+
+            if let Some(timeout) = self.scroll_repeat.timeout() {
+                std::thread::sleep(timeout.min(Duration::from_millis(10)));
+                continue;
+            }
+
+            let event = self.conn.wait_for_event().context("wait for event")?;
+            self.handle_event(event)?;
         }
     }
 
@@ -411,161 +449,5 @@ fn capture_root(conn: &RustConnection, root: Window, w: u32, h: u32) -> Result<V
 /// Reuse the same evdev keycode → Key mapping as the Wayland backend.
 /// X11 keycodes are evdev + 8, so callers subtract 8 before calling this.
 fn keycode_to_key(kc: u32, shift_held: bool) -> Option<Key> {
-    match kc {
-        1 => return Some(Key::Escape),
-        14 => return Some(Key::Backspace),
-        15 => return Some(Key::Tab),
-        28 => return Some(Key::Enter),
-        57 => return Some(Key::Space),
-        102 => return Some(Key::Home),
-        103 => return Some(Key::Up),
-        104 => return Some(Key::PageUp),
-        105 => return Some(Key::Left),
-        106 => return Some(Key::Right),
-        107 => return Some(Key::End),
-        108 => return Some(Key::Down),
-        109 => return Some(Key::PageDown),
-        110 => return Some(Key::Insert),
-        111 => return Some(Key::Delete),
-        59 => return Some(Key::F1),
-        60 => return Some(Key::F2),
-        61 => return Some(Key::F3),
-        62 => return Some(Key::F4),
-        63 => return Some(Key::F5),
-        64 => return Some(Key::F6),
-        65 => return Some(Key::F7),
-        66 => return Some(Key::F8),
-        67 => return Some(Key::F9),
-        68 => return Some(Key::F10),
-        87 => return Some(Key::F11),
-        88 => return Some(Key::F12),
-        58 => return Some(Key::CapsLock),
-        69 => return Some(Key::NumLock),
-        70 => return Some(Key::ScrollLock),
-        99 => return Some(Key::PrintScreen),
-        119 => return Some(Key::Pause),
-        127 => return Some(Key::ContextMenu),
-        82 => return Some(Key::NumPad0),
-        79 => return Some(Key::NumPad1),
-        80 => return Some(Key::NumPad2),
-        81 => return Some(Key::NumPad3),
-        75 => return Some(Key::NumPad4),
-        76 => return Some(Key::NumPad5),
-        77 => return Some(Key::NumPad6),
-        71 => return Some(Key::NumPad7),
-        72 => return Some(Key::NumPad8),
-        73 => return Some(Key::NumPad9),
-        78 => return Some(Key::NumPadAdd),
-        74 => return Some(Key::NumPadSubtract),
-        55 => return Some(Key::NumPadMultiply),
-        98 => return Some(Key::NumPadDivide),
-        83 => return Some(Key::NumPadDecimal),
-        96 => return Some(Key::NumPadEnter),
-        _ => {}
-    }
-
-    let ch = if shift_held {
-        match kc {
-            2 => '!',
-            3 => '@',
-            4 => '#',
-            5 => '$',
-            6 => '%',
-            7 => '^',
-            8 => '&',
-            9 => '*',
-            10 => '(',
-            11 => ')',
-            12 => '_',
-            13 => '+',
-            26 => '{',
-            27 => '}',
-            43 => '|',
-            39 => ':',
-            40 => '"',
-            51 => '<',
-            52 => '>',
-            53 => '?',
-            41 => '~',
-            16 => 'Q',
-            17 => 'W',
-            18 => 'E',
-            19 => 'R',
-            20 => 'T',
-            21 => 'Y',
-            22 => 'U',
-            23 => 'I',
-            24 => 'O',
-            25 => 'P',
-            30 => 'A',
-            31 => 'S',
-            32 => 'D',
-            33 => 'F',
-            34 => 'G',
-            35 => 'H',
-            36 => 'J',
-            37 => 'K',
-            38 => 'L',
-            44 => 'Z',
-            45 => 'X',
-            46 => 'C',
-            47 => 'V',
-            48 => 'B',
-            49 => 'N',
-            50 => 'M',
-            _ => return None,
-        }
-    } else {
-        match kc {
-            2 => '1',
-            3 => '2',
-            4 => '3',
-            5 => '4',
-            6 => '5',
-            7 => '6',
-            8 => '7',
-            9 => '8',
-            10 => '9',
-            11 => '0',
-            12 => '-',
-            13 => '=',
-            26 => '[',
-            27 => ']',
-            43 => '\\',
-            39 => ';',
-            40 => '\'',
-            51 => ',',
-            52 => '.',
-            53 => '/',
-            41 => '`',
-            16 => 'q',
-            17 => 'w',
-            18 => 'e',
-            19 => 'r',
-            20 => 't',
-            21 => 'y',
-            22 => 'u',
-            23 => 'i',
-            24 => 'o',
-            25 => 'p',
-            30 => 'a',
-            31 => 's',
-            32 => 'd',
-            33 => 'f',
-            34 => 'g',
-            35 => 'h',
-            36 => 'j',
-            37 => 'k',
-            38 => 'l',
-            44 => 'z',
-            45 => 'x',
-            46 => 'c',
-            47 => 'v',
-            48 => 'b',
-            49 => 'n',
-            50 => 'm',
-            _ => return None,
-        }
-    };
-    Some(Key::Char(ch))
+    super::keymap::keycode_to_key(kc, shift_held)
 }

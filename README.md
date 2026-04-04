@@ -118,6 +118,11 @@ scroll_right = "right"
 macro_menu = "tab"
 macro_record = "`"
 
+[scroll]
+repeat_delay_ms = 550
+repeat_rate = 10
+repeat_burst_ms = 900
+
 
 
 
@@ -184,3 +189,43 @@ Special keys use snake_case names:
 | `num_pad_add` `num_pad_subtract` `num_pad_multiply` `num_pad_divide` `num_pad_decimal` `num_pad_enter` | Numpad operators |
 
 Shifted characters work too: `"@"`, `"!"`, `"~"`, `"A"` (uppercase), etc.
+
+### Scroll
+
+These settings control held-key scrolling on both Wayland and X11. They are optional. If omitted, the built-in defaults are used.
+
+- `repeat_delay_ms` controls how long you must hold a scroll key before repeat starts.
+  Smaller values make scrolling begin sooner.
+  Larger values make it feel less eager.
+- `repeat_rate` controls how many repeated scroll steps happen per second after repeat starts.
+  Smaller values feel slower and more controlled.
+  Larger values feel faster and more aggressive.
+- `repeat_burst_ms` limits how long repeated scrolling can continue without a fresh physical key event.
+  This is mainly a safety stop for overlay teardown/reopen behavior, where key release can occasionally be missed.
+  Smaller values stop repeat sooner.
+  Larger values allow repeat to continue longer.
+
+How it behaves:
+
+- Tap the scroll key once: one scroll step is sent.
+- Hold the scroll key longer than `repeat_delay_ms`: repeated single-step scroll events begin.
+- Those repeated events are sent at `repeat_rate` steps per second.
+- If release is missed by the compositor, `repeat_burst_ms` prevents the scroll from continuing forever.
+
+Example: slower, calmer scrolling
+
+```toml
+[scroll]
+repeat_delay_ms = 700
+repeat_rate = 7
+repeat_burst_ms = 800
+```
+
+Example: faster repeat after hold
+
+```toml
+[scroll]
+repeat_delay_ms = 400
+repeat_rate = 14
+repeat_burst_ms = 1200
+```

@@ -1,8 +1,9 @@
+use super::{column_center, main_cell_center, Mode};
 use crate::{
     backend::{Backend, KeyEvent},
-    input::{dynamic_cols, dynamic_rows, hints, sub_cols, sub_hints, sub_rows, InputState},
+    input::{hints, sub_hints, InputState},
     macro_store::MacroAction,
-    mode::{draw_grid, Mode, ModeTransition},
+    mode::{draw_grid, ModeTransition},
 };
 
 pub(super) fn handle_key<B: Backend>(
@@ -17,8 +18,54 @@ pub(super) fn handle_key<B: Backend>(
     drag_start_keys: &str,
 ) -> anyhow::Result<ModeTransition> {
     match key {
-        KeyEvent::Undo => Ok(ModeTransition::Back),
+        KeyEvent::Back => {
+            eprintln!("[debug] action: recording back within selection");
+            match input_state {
+                InputState::First => Ok(ModeTransition::Stay),
+                InputState::Second(_) => Ok(ModeTransition::Enter(Mode::MacroRecording {
+                    input_state: InputState::First,
+                    target: None,
+                    drag_origin,
+                    recorded_actions: recorded_actions.to_vec(),
+                    drag_start_keys: drag_start_keys.to_owned(),
+                })),
+                InputState::SubFirst { col, .. } => {
+                    let target = column_center(width, height, *col);
+                    if let Some((x, y)) = target {
+                        backend.move_mouse(x, y)?;
+                    }
+                    Ok(ModeTransition::Enter(Mode::MacroRecording {
+                        input_state: InputState::Second(hints()[*col as usize]),
+                        target,
+                        drag_origin,
+                        recorded_actions: recorded_actions.to_vec(),
+                        drag_start_keys: drag_start_keys.to_owned(),
+                    }))
+                }
+                InputState::Ready { col, row, .. } => {
+                    let target = main_cell_center(width, height, *col, *row);
+                    if let Some((x, y)) = target {
+                        backend.move_mouse(x, y)?;
+                    }
+                    Ok(ModeTransition::Enter(Mode::MacroRecording {
+                        input_state: InputState::SubFirst {
+                            col: *col,
+                            row: *row,
+                        },
+                        target,
+                        drag_origin,
+                        recorded_actions: recorded_actions.to_vec(),
+                        drag_start_keys: drag_start_keys.to_owned(),
+                    }))
+                }
+            }
+        }
+        KeyEvent::Undo => {
+            eprintln!("[debug] action: recording undo/back stack");
+            Ok(ModeTransition::Back)
+        }
         KeyEvent::MacroRecord => {
+            eprintln!("[debug] action: stop macro recording");
             if recorded_actions.is_empty() {
                 Ok(ModeTransition::Enter(Mode::Normal {
                     input_state: InputState::First,
@@ -31,82 +78,29 @@ pub(super) fn handle_key<B: Backend>(
                 }))
             }
         }
-        KeyEvent::Close => Ok(ModeTransition::Enter(Mode::Normal {
-            input_state: InputState::First,
-            target: None,
-            drag_origin: None,
-        })),
+        KeyEvent::Close => {
+            eprintln!("[debug] action: close recording and return to normal mode");
+            Ok(ModeTransition::Enter(Mode::Normal {
+                input_state: InputState::First,
+                target: None,
+                drag_origin: None,
+            }))
+        }
         KeyEvent::Char(ch)
             if hints().contains(ch)
                 || (matches!(input_state, InputState::SubFirst { .. })
                     && sub_hints().contains(ch)) =>
         {
-            match input_state {
-                InputState::First => Ok(ModeTransition::Enter(Mode::MacroRecording {
-                    input_state: InputState::Second(*ch),
-                    target,
-                    drag_origin,
-                    recorded_actions: recorded_actions.to_vec(),
-                    drag_start_keys: drag_start_keys.to_owned(),
-                })),
-                InputState::Second(first) => {
-                    let col = hints().iter().position(|c| c == first).unwrap_or(0) as u32;
-                    let row = hints().iter().position(|c| c == ch).unwrap_or(0) as u32;
-                    let ncols = dynamic_cols(width);
-                    let nrows = dynamic_rows(height);
-
-                    // Reject if outside the currently rendered grid
-                    if col >= ncols || row >= nrows {
-                        return Ok(ModeTransition::Stay);
-                    }
-
-                    let cell_w = width / ncols;
-                    let cell_h = height / nrows;
-                    let cx = col * cell_w + cell_w / 2;
-                    let cy = row * cell_h + cell_h / 2;
-
-                    backend.move_mouse(cx, cy)?;
-
-                    Ok(ModeTransition::Enter(Mode::MacroRecording {
-                        input_state: InputState::SubFirst { col, row },
-                        target: Some((cx, cy)),
-                        drag_origin,
-                        recorded_actions: recorded_actions.to_vec(),
-                        drag_start_keys: drag_start_keys.to_owned(),
-                    }))
-                }
-                InputState::SubFirst { col, row } => {
-                    if let Some(idx) = sub_hints().iter().position(|c| c == ch) {
-                        let sub_col = idx as u32 % sub_cols();
-                        let sub_row = idx as u32 / sub_cols();
-                        let ncols = dynamic_cols(width);
-                        let nrows = dynamic_rows(height);
-                        let cell_w = width / ncols;
-                        let cell_h = height / nrows;
-                        let sub_cell_w = cell_w / sub_cols();
-                        let sub_cell_h = cell_h / sub_rows();
-                        let cx = col * cell_w + sub_col * sub_cell_w + sub_cell_w / 2;
-                        let cy = row * cell_h + sub_row * sub_cell_h + sub_cell_h / 2;
-
-                        backend.move_mouse(cx, cy)?;
-
-                        return Ok(ModeTransition::Enter(Mode::MacroRecording {
-                            input_state: InputState::Ready {
-                                col: *col,
-                                row: *row,
-                                sub_col,
-                                sub_row,
-                            },
-                            target: Some((cx, cy)),
-                            drag_origin,
-                            recorded_actions: recorded_actions.to_vec(),
-                            drag_start_keys: drag_start_keys.to_owned(),
-                        }));
-                    }
-                    Ok(ModeTransition::Stay)
-                }
-                InputState::Ready { .. } => Ok(ModeTransition::Stay),
-            }
+            let (new_input_state, new_target) = crate::mode::handle_char_input(
+                width, height, backend, input_state, *ch, target, drag_origin, "recording",
+            )?;
+            Ok(ModeTransition::Enter(Mode::MacroRecording {
+                input_state: new_input_state,
+                target: new_target,
+                drag_origin,
+                recorded_actions: recorded_actions.to_vec(),
+                drag_start_keys: drag_start_keys.to_owned(),
+            }))
         }
         KeyEvent::Click | KeyEvent::DoubleClick | KeyEvent::RightClick
             if target.is_some() && drag_origin.is_none() =>
@@ -116,14 +110,17 @@ pub(super) fn handle_key<B: Backend>(
             let mut new_actions = recorded_actions.to_vec();
             match key {
                 KeyEvent::Click => {
+                    eprintln!("[debug] action: recording click at ({}, {})", x, y);
                     backend.click(x, y)?;
                     new_actions.push(MacroAction::Click(current_keys));
                 }
                 KeyEvent::DoubleClick => {
+                    eprintln!("[debug] action: recording double_click at ({}, {})", x, y);
                     backend.double_click(x, y)?;
                     new_actions.push(MacroAction::DoubleClick(current_keys));
                 }
                 KeyEvent::RightClick => {
+                    eprintln!("[debug] action: recording right_click at ({}, {})", x, y);
                     backend.right_click(x, y)?;
                     new_actions.push(MacroAction::RightClick(current_keys));
                 }
@@ -142,6 +139,13 @@ pub(super) fn handle_key<B: Backend>(
             let (x, y) = target.unwrap();
             let current_keys = input_state.keys();
             let mut new_actions = recorded_actions.to_vec();
+            eprintln!(
+                "[debug] action: recording drag_select from ({}, {}) to ({}, {})",
+                drag_origin.unwrap().0,
+                drag_origin.unwrap().1,
+                x,
+                y
+            );
             backend.drag_select(drag_origin.unwrap().0, drag_origin.unwrap().1, x, y)?;
             new_actions.push(MacroAction::Drag(drag_start_keys.to_owned(), current_keys));
             backend.reopen()?;
@@ -162,6 +166,7 @@ pub(super) fn handle_key<B: Backend>(
                 ) =>
         {
             let mut new_actions = recorded_actions.to_vec();
+            eprintln!("[debug] action: recording move only");
             new_actions.push(MacroAction::Move(input_state.keys()));
             Ok(ModeTransition::Enter(Mode::MacroRecording {
                 input_state: InputState::First,
@@ -172,6 +177,7 @@ pub(super) fn handle_key<B: Backend>(
             }))
         }
         KeyEvent::Char('/') if drag_origin.is_some() => {
+            eprintln!("[debug] action: recording cancel drag mode");
             Ok(ModeTransition::Enter(Mode::MacroRecording {
                 input_state: InputState::First,
                 target: None,
@@ -186,6 +192,7 @@ pub(super) fn handle_key<B: Backend>(
                 InputState::Ready { .. } | InputState::SubFirst { .. }
             ) =>
         {
+            eprintln!("[debug] action: recording enter drag mode");
             Ok(ModeTransition::Enter(Mode::MacroRecording {
                 input_state: InputState::First,
                 target,
@@ -193,6 +200,54 @@ pub(super) fn handle_key<B: Backend>(
                 recorded_actions: recorded_actions.to_vec(),
                 drag_start_keys: input_state.keys(),
             }))
+        }
+        KeyEvent::ScrollUp => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: recording move_mouse to scroll target ({}, {}) before scroll_up",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: recording scroll_up");
+            backend.scroll_up()?;
+            Ok(ModeTransition::Redraw)
+        }
+        KeyEvent::ScrollDown => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: recording move_mouse to scroll target ({}, {}) before scroll_down",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: recording scroll_down");
+            backend.scroll_down()?;
+            Ok(ModeTransition::Redraw)
+        }
+        KeyEvent::ScrollLeft => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: recording move_mouse to scroll target ({}, {}) before scroll_left",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: recording scroll_left");
+            backend.scroll_left()?;
+            Ok(ModeTransition::Redraw)
+        }
+        KeyEvent::ScrollRight => {
+            if let Some((x, y)) = target {
+                eprintln!(
+                    "[debug] action: recording move_mouse to scroll target ({}, {}) before scroll_right",
+                    x, y
+                );
+                backend.move_mouse(x, y)?;
+            }
+            eprintln!("[debug] action: recording scroll_right");
+            backend.scroll_right()?;
+            Ok(ModeTransition::Redraw)
         }
         _ => Ok(ModeTransition::Stay),
     }
