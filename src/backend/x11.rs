@@ -27,6 +27,9 @@ pub struct X11Backend {
     depth: u8,
     mapped: bool,
     shift_held: bool,
+    control_held: bool,
+    alt_held: bool,
+    meta_held: bool,
     /// Screenshot of the desktop captured before mapping the overlay.
     /// Used to alpha-blend the overlay on top (X11 has no compositor).
     background: Vec<u8>,
@@ -34,8 +37,7 @@ pub struct X11Backend {
 
 impl X11Backend {
     pub fn new() -> Result<Self> {
-        let (conn, screen_num) =
-            RustConnection::connect(None).context("connect to X11 display")?;
+        let (conn, screen_num) = RustConnection::connect(None).context("connect to X11 display")?;
 
         // Verify XTest extension is available
         conn.xtest_get_version(2, 2)
@@ -108,6 +110,9 @@ impl X11Backend {
             depth,
             mapped: true,
             shift_held: false,
+            control_held: false,
+            alt_held: false,
+            meta_held: false,
             background,
         })
     }
@@ -122,9 +127,7 @@ impl X11Backend {
             // Sync to ensure the server has processed the unmap before we
             // simulate input — otherwise the overlay may intercept our own
             // fake events.
-            self.conn
-                .sync()
-                .context("sync after teardown")?;
+            self.conn.sync().context("sync after teardown")?;
             self.mapped = false;
         }
         Ok(())
@@ -132,16 +135,7 @@ impl X11Backend {
 
     fn warp_and_sync(&self, x: u32, y: u32) -> Result<()> {
         self.conn
-            .warp_pointer(
-                x11rb::NONE,
-                self.root,
-                0,
-                0,
-                0,
-                0,
-                x as i16,
-                y as i16,
-            )
+            .warp_pointer(x11rb::NONE, self.root, 0, 0, 0, 0, x as i16, y as i16)
             .context("warp pointer")?;
         self.conn.flush().context("flush after warp")?;
         self.conn.sync().context("sync after warp")?;
@@ -344,28 +338,45 @@ impl Backend for X11Backend {
             match event {
                 Event::KeyPress(ev) => {
                     let keycode = ev.detail;
-                    // Shift keys (left=50, right=62 in X11 keycodes)
-                    if keycode == 50 || keycode == 62 {
-                        self.shift_held = true;
-                        continue;
+                    // Track modifier state
+                    match keycode {
+                        50 | 62 => {
+                            self.shift_held = true;
+                        }
+                        29 | 97 => {
+                            self.control_held = true;
+                        }
+                        56 | 57 | 100 => {
+                            self.alt_held = true;
+                        }
+                        125 | 126 => {
+                            self.meta_held = true;
+                        }
+                        _ => {}
                     }
-                    // X11 keycodes are evdev + 8
+                    // Process ALL keys (including modifiers) for binding
                     let evdev_kc = (keycode as u32).wrapping_sub(8);
-                    if let Some(key_event) =
-                        keycode_to_key(evdev_kc, self.shift_held).and_then(|k| {
-                            config().keys.to_event(k).or(match k {
-                                Key::Char(c) => Some(KeyEvent::Char(c)),
-                                _ => None,
-                            })
-                        })
-                    {
-                        return Ok(Some(key_event));
+                    if let Some(k) = keycode_to_key(evdev_kc, self.shift_held) {
+                        return Ok(Some(
+                            config()
+                                .keys
+                                .to_event(k)
+                                .or(match k {
+                                    Key::Char(c) => Some(KeyEvent::Char(c)),
+                                    _ => None,
+                                })
+                                .unwrap_or(KeyEvent::Close),
+                        ));
                     }
                 }
                 Event::KeyRelease(ev) => {
                     let keycode = ev.detail;
-                    if keycode == 50 || keycode == 62 {
-                        self.shift_held = false;
+                    match keycode {
+                        50 | 62 => self.shift_held = false,
+                        29 | 97 => self.control_held = false,
+                        56 | 57 | 100 => self.alt_held = false,
+                        125 | 126 => self.meta_held = false,
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -430,13 +441,13 @@ fn keycode_to_key(kc: u32, shift_held: bool) -> Option<Key> {
         28 => return Some(Key::Enter),
         57 => return Some(Key::Space),
         102 => return Some(Key::Home),
-        103 => return Some(Key::Up),
-        104 => return Some(Key::PageUp),
+        103 => return Some(Key::End),
+        104 => return Some(Key::Up),
         105 => return Some(Key::Left),
         106 => return Some(Key::Right),
-        107 => return Some(Key::End),
-        108 => return Some(Key::Down),
-        109 => return Some(Key::PageDown),
+        107 => return Some(Key::PageUp),
+        108 => return Some(Key::PageDown),
+        109 => return Some(Key::Down),
         110 => return Some(Key::Insert),
         111 => return Some(Key::Delete),
         59 => return Some(Key::F1),
@@ -457,6 +468,18 @@ fn keycode_to_key(kc: u32, shift_held: bool) -> Option<Key> {
         99 => return Some(Key::PrintScreen),
         119 => return Some(Key::Pause),
         127 => return Some(Key::ContextMenu),
+        // Modifiers (evdev keycodes, not X11)
+        29 => return Some(Key::ControlLeft),
+        97 => return Some(Key::ControlRight),
+        56 => return Some(Key::AltLeft),
+        100 => return Some(Key::AltRight),
+        42 => return Some(Key::ShiftLeft),
+        50 => return Some(Key::ShiftLeft),
+        54 => return Some(Key::ShiftRight),
+        125 => return Some(Key::MetaLeft),
+        126 => return Some(Key::MetaRight),
+        143 => return Some(Key::Fn),
+        // Numpad
         82 => return Some(Key::NumPad0),
         79 => return Some(Key::NumPad1),
         80 => return Some(Key::NumPad2),

@@ -56,6 +56,9 @@ impl WaylandBackend {
             configured: false,
             pending_key: None,
             shift_held: false,
+            control_held: false,
+            alt_held: false,
+            meta_held: false,
             current_output: None,
         };
 
@@ -344,6 +347,9 @@ struct WaylandState {
     configured: bool,
     pending_key: Option<KeyEvent>,
     shift_held: bool,
+    control_held: bool,
+    alt_held: bool,
+    meta_held: bool,
     current_output: Option<wl_output::WlOutput>,
 }
 
@@ -461,22 +467,30 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
         } = event
         {
             match key_state {
-                wl_keyboard::KeyState::Pressed => match key {
-                    42 | 54 => state.shift_held = true,
-                    _ => {
-                        state.pending_key = keycode_to_key(key, state.shift_held).and_then(|k| {
-                            config().keys.to_event(k).or(match k {
-                                Key::Char(c) => Some(KeyEvent::Char(c)),
-                                _ => None,
-                            })
+                wl_keyboard::KeyState::Pressed => {
+                    // Track modifier state
+                    match key {
+                        42 | 54 => state.shift_held = true,
+                        29 => state.control_held = true,
+                        56 | 57 | 97 | 100 => state.alt_held = true,
+                        125 | 126 => state.meta_held = true,
+                        _ => {}
+                    }
+                    // Process ALL keys (including modifiers) for binding
+                    if let Some(k) = keycode_to_key(key, state.shift_held) {
+                        state.pending_key = config().keys.to_event(k).or(match k {
+                            Key::Char(c) => Some(KeyEvent::Char(c)),
+                            _ => None,
                         });
                     }
-                },
-                wl_keyboard::KeyState::Released => {
-                    if key == 42 || key == 54 {
-                        state.shift_held = false;
-                    }
                 }
+                wl_keyboard::KeyState::Released => match key {
+                    42 | 54 => state.shift_held = false,
+                    29 => state.control_held = false,
+                    56 | 57 | 97 | 100 => state.alt_held = false,
+                    125 | 126 => state.meta_held = false,
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -587,6 +601,17 @@ fn keycode_to_key(kc: u32, shift_held: bool) -> Option<Key> {
         99 => return Some(Key::PrintScreen),
         119 => return Some(Key::Pause),
         127 => return Some(Key::ContextMenu),
+        // Modifiers
+        125 => return Some(Key::MetaLeft),
+        126 => return Some(Key::MetaRight),
+        29 => return Some(Key::ControlLeft),
+        97 => return Some(Key::ControlRight),
+        56 => return Some(Key::AltLeft),
+        100 => return Some(Key::AltRight),
+        42 => return Some(Key::ShiftLeft),
+        50 => return Some(Key::ShiftLeft),
+        54 => return Some(Key::ShiftRight),
+        143 => return Some(Key::Fn),
         // Numpad
         82 => return Some(Key::NumPad0),
         79 => return Some(Key::NumPad1),

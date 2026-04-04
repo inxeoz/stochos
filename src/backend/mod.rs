@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 /// A decoded key event, platform-agnostic.
+#[derive(Debug)]
 pub enum KeyEvent {
     Char(char),
     Click,
