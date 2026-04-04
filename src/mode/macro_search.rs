@@ -46,14 +46,7 @@ pub(super) fn handle_key<B: Backend>(
                 selected: new_selected,
             }))
         }
-        KeyEvent::Undo => {
-            let mut query = query.to_vec();
-            query.pop();
-            Ok(ModeTransition::Enter(Mode::MacroSearch {
-                query,
-                selected: 0,
-            }))
-        }
+        KeyEvent::Undo => Ok(ModeTransition::Back),
         KeyEvent::Char(ch) => {
             let mut query = query.to_vec();
             query.push(*ch);

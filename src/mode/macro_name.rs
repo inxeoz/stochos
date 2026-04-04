@@ -37,15 +37,7 @@ pub(super) fn handle_key(
                 drag_origin: None,
             }))
         }
-        KeyEvent::Undo => {
-            let mut name = name.to_vec();
-            name.pop();
-            Ok(ModeTransition::Enter(Mode::MacroName {
-                bind_key,
-                name,
-                actions: actions.to_vec(),
-            }))
-        }
+        KeyEvent::Undo => Ok(ModeTransition::Back),
         KeyEvent::Char(ch) => {
             let mut name = name.to_vec();
             name.push(*ch);
