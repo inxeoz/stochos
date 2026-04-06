@@ -15,22 +15,6 @@ pub fn config() -> &'static Config {
     CONFIG.get().expect("config not initialized")
 }
 
-pub fn colors() -> &'static Colors {
-    &config().colors
-}
-
-pub fn font_size() -> u32 {
-    config().font_size()
-}
-
-pub fn sub_hint_font_size() -> u32 {
-    config().sub_hint_font_size()
-}
-
-pub fn panel_font_size() -> u32 {
-    config().panel_font_size()
-}
-
 fn clamp_scale(scale: u32) -> u32 {
     scale.clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end())
 }
@@ -427,12 +411,24 @@ impl Config {
             .map_or_else(|| self.font_size(), clamp_scale)
     }
 
+    pub fn hints(&self) -> &[char] {
+        &self.grid.hints
+    }
+
     pub fn cols(&self) -> u32 {
         self.grid.hints.len() as u32
     }
 
     pub fn rows(&self) -> u32 {
         self.grid.hints.len() as u32
+    }
+
+    pub fn sub_hints(&self) -> &[char] {
+        &self.grid.sub_hints
+    }
+
+    pub fn sub_cols(&self) -> u32 {
+        self.grid.sub_cols
     }
 
     pub fn sub_rows(&self) -> u32 {

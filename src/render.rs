@@ -1,7 +1,4 @@
-use crate::{
-    config::{colors, font_size, panel_font_size, sub_hint_font_size},
-    input::{dynamic_cols, dynamic_rows, hints, sub_cols, sub_hints, sub_rows, InputState},
-};
+use crate::{config::config, input::InputState};
 use font8x8::UnicodeFonts;
 
 fn line_height(scale: u32) -> u32 {
@@ -69,6 +66,7 @@ fn subdivide_span(start: u32, span: u32, index: u32, count: u32) -> (u32, u32) {
 }
 
 pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging: bool) {
+    let cfg = config();
     let mut c = Canvas { buf, w };
     c.clear();
     match input {
@@ -88,21 +86,18 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
         _ => {}
     }
 
-    let hints = hints();
-    let ncols = dynamic_cols(w);
-    let nrows = dynamic_rows(h);
+    let hints = cfg.hints();
+    let ncols = cfg.dynamic_cols(w);
+    let nrows = cfg.dynamic_rows(h);
     let cell_w = w / ncols;
     let cell_h = h / nrows;
-    let scale = font_size();
+    let scale = cfg.font_size();
     let char_w = 8 * scale;
     let char_h = 8 * scale;
     let gap = 3u32;
     let label_w = char_w * 2 + gap;
-    let cell_normal = if dragging {
-        colors().cell_drag
-    } else {
-        colors().cell_normal
-    };
+    let colors = &cfg.colors;
+    let cell_normal = if dragging { colors.cell_drag } else { colors.cell_normal };
 
     for row in 0..nrows {
         for col in 0..ncols {
@@ -112,16 +107,12 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
             let second_hint = hints[row as usize];
 
             let (cell_bg, c1, c2) = match input {
-                InputState::First => (Some(cell_normal), colors().text_first, colors().text_second),
+                InputState::First => (Some(cell_normal), colors.text_first, colors.text_second),
                 InputState::Second(typed) => {
                     if first_hint == *typed {
-                        (
-                            Some(colors().cell_highlight),
-                            colors().text_highlight,
-                            colors().text_second,
-                        )
+                        (Some(colors.cell_highlight), colors.text_highlight, colors.text_second)
                     } else {
-                        (None, colors().text_dim, colors().text_dim)
+                        (None, colors.text_dim, colors.text_dim)
                     }
                 }
                 _ => unreachable!(),
@@ -140,39 +131,44 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
 }
 
 pub fn render_rec_indicator(buf: &mut [u8], w: u32) {
-    let scale = font_size();
+    let cfg = config();
+    let scale = cfg.font_size();
+    let colors = &cfg.colors;
     let mut c = Canvas { buf, w };
-    c.fill_rect(8, 8, 8 * scale * 4, line_height(scale), colors().rec_bg);
-    c.draw_text(12, 12, b"REC", colors().text_white, scale);
+    c.fill_rect(8, 8, 8 * scale * 4, line_height(scale), colors.rec_bg);
+    c.draw_text(12, 12, b"REC", colors.text_white, scale);
 }
 
 pub fn render_macro_bind_key(buf: &mut [u8], w: u32, h: u32) {
+    let colors = &config().colors;
     let mut p = Panel::new(buf, w, h, 6);
-    p.text(b"save macro", colors().text_first)
+    p.text(b"save macro", colors.text_first)
         .skip()
-        .text(b"press a key to bind", colors().text_white)
-        .text(b"enter to skip binding", colors().text_grey)
-        .text(b"escape to cancel", colors().text_grey);
+        .text(b"press a key to bind", colors.text_white)
+        .text(b"enter to skip binding", colors.text_grey)
+        .text(b"escape to cancel", colors.text_grey);
 }
 
 pub fn render_macro_name(buf: &mut [u8], w: u32, h: u32, name: &[char], bind_key: Option<char>) {
+    let colors = &config().colors;
     let mut p = Panel::new(buf, w, h, 7);
-    p.text(b"name this macro", colors().text_first);
+    p.text(b"name this macro", colors.text_first);
     match bind_key {
-        Some(k) => p.text_with_char(b"bound to ", k, colors().text_grey),
+        Some(k) => p.text_with_char(b"bound to ", k, colors.text_grey),
         None => p.skip(),
     };
-    p.input_line(name, colors().text_white)
+    p.input_line(name, colors.text_white)
         .skip()
-        .text(b"enter to save", colors().text_grey)
-        .text(b"escape to cancel", colors().text_grey);
+        .text(b"enter to save", colors.text_grey)
+        .text(b"escape to cancel", colors.text_grey);
 }
 
 pub fn render_macro_replay_wait(buf: &mut [u8], w: u32, h: u32) {
+    let colors = &config().colors;
     let mut p = Panel::new(buf, w, h, 4);
-    p.text(b"press macro key", colors().text_first)
+    p.text(b"press macro key", colors.text_first)
         .skip()
-        .text(b"escape to cancel", colors().text_grey);
+        .text(b"escape to cancel", colors.text_grey);
 }
 
 pub fn render_macro_search(
@@ -183,19 +179,20 @@ pub fn render_macro_search(
     results: &[(Option<char>, &str)],
     selected: usize,
 ) {
+    let colors = &config().colors;
     let max_visible = 10usize;
     let visible = results.len().min(max_visible);
     let mut p = Panel::new(buf, w, h, visible as u32 + 5);
-    p.input_line(query, colors().text_white).skip();
+    p.input_line(query, colors.text_white).skip();
     if results.is_empty() {
-        p.text(b"no results", colors().text_grey);
+        p.text(b"no results", colors.text_grey);
     } else {
         for (i, (bind_key, name)) in results[..visible].iter().enumerate() {
             p.search_entry(*bind_key, name, i == selected);
         }
     }
     p.skip()
-        .text(b"tab:next enter:select esc:back", colors().text_grey);
+        .text(b"tab:next enter:select esc:back", colors.text_grey);
 }
 
 struct Canvas<'a> {
@@ -268,9 +265,10 @@ struct Panel<'a> {
 
 impl<'a> Panel<'a> {
     fn new(buf: &'a mut [u8], w: u32, h: u32, rows: u32) -> Self {
+        let cfg = config();
         let mut c = Canvas { buf, w };
         c.clear();
-        let scale = panel_font_size();
+        let scale = cfg.panel_font_size();
         let lh = line_height(scale);
         let panel_h = (rows * lh + 32).min(h.saturating_sub(4));
         let min_panel_chars = 30;
@@ -279,7 +277,7 @@ impl<'a> Panel<'a> {
         let panel_w = (w * 30 / 100).max(panel_min_w).min(w);
         let panel_x = (w.saturating_sub(panel_w)) / 2;
         let panel_y = (h.saturating_sub(panel_h)) / 2;
-        c.fill_rect(panel_x, panel_y, panel_w, panel_h, colors().panel_bg);
+        c.fill_rect(panel_x, panel_y, panel_w, panel_h, cfg.colors.panel_bg);
         Self {
             c,
             tx: panel_x + panel_padding,
@@ -332,6 +330,7 @@ impl<'a> Panel<'a> {
     }
 
     fn search_entry(&mut self, bind_key: Option<char>, name: &str, selected: bool) -> &mut Self {
+        let colors = &config().colors;
         let cw = char_width(self.scale);
         let lh = line_height(self.scale);
         if selected {
@@ -340,39 +339,19 @@ impl<'a> Panel<'a> {
                 self.ty.saturating_sub(2),
                 self.pw - 8,
                 lh,
-                colors().selected_bg,
+                colors.selected_bg,
             );
         }
-        let text_color = if selected {
-            colors().text_highlight
-        } else {
-            colors().text_white
-        };
+        let text_color = if selected { colors.text_highlight } else { colors.text_white };
         match bind_key {
             Some(k) => {
-                self.c
-                    .draw_text(self.tx, self.ty, b"[", colors().text_grey, self.scale);
-                self.c
-                    .draw_glyph(self.tx + cw, self.ty, k, colors().text_grey, self.scale);
-                self.c.draw_text(
-                    self.tx + 2 * cw,
-                    self.ty,
-                    b"] ",
-                    colors().text_grey,
-                    self.scale,
-                );
+                self.c.draw_text(self.tx, self.ty, b"[", colors.text_grey, self.scale);
+                self.c.draw_glyph(self.tx + cw, self.ty, k, colors.text_grey, self.scale);
+                self.c.draw_text(self.tx + 2 * cw, self.ty, b"] ", colors.text_grey, self.scale);
             }
-            None => self
-                .c
-                .draw_text(self.tx, self.ty, b"[ ] ", colors().text_grey, self.scale),
+            None => self.c.draw_text(self.tx, self.ty, b"[ ] ", colors.text_grey, self.scale),
         }
-        self.c.draw_text(
-            self.tx + 4 * cw,
-            self.ty,
-            name.as_bytes(),
-            text_color,
-            self.scale,
-        );
+        self.c.draw_text(self.tx + 4 * cw, self.ty, name.as_bytes(), text_color, self.scale);
         self.ty += line_height(self.scale);
         self
     }
@@ -386,11 +365,12 @@ fn render_sub_grid(
     selected: Option<(u32, u32)>,
     dragging: bool,
 ) {
-    let nsub_cols = sub_cols();
-    let nsub_rows = sub_rows();
-    let sub_hints = sub_hints();
-    let ncols = dynamic_cols(c.w);
-    let nrows = dynamic_rows(h);
+    let cfg = config();
+    let nsub_cols = cfg.sub_cols();
+    let nsub_rows = cfg.sub_rows();
+    let sub_hints = cfg.sub_hints();
+    let ncols = cfg.dynamic_cols(c.w);
+    let nrows = cfg.dynamic_rows(h);
 
     // Early return if main_col/main_row are outside the rendered grid
     if main_col >= ncols || main_row >= nrows {
@@ -401,20 +381,17 @@ fn render_sub_grid(
     let cell_h = h / nrows;
     let cell_x = main_col * cell_w;
     let cell_y = main_row * cell_h;
+    let colors = &cfg.colors;
 
-    c.fill_rect(cell_x, cell_y, cell_w, cell_h, colors().sub_bg);
+    c.fill_rect(cell_x, cell_y, cell_w, cell_h, colors.sub_bg);
 
-    let border = if dragging {
-        colors().border_dragging
-    } else {
-        colors().border
-    };
+    let border = if dragging { colors.border_dragging } else { colors.border };
     c.fill_rect(cell_x, cell_y, cell_w, 1, border);
     c.fill_rect(cell_x, cell_y + cell_h - 1, cell_w, 1, border);
     c.fill_rect(cell_x, cell_y, 1, cell_h, border);
     c.fill_rect(cell_x + cell_w - 1, cell_y, 1, cell_h, border);
 
-    let sub_hint_scale = sub_hint_font_size();
+    let sub_hint_scale = cfg.sub_hint_font_size();
     let col_spans: Vec<_> = (0..nsub_cols)
         .map(|sub_col| subdivide_span(cell_x, cell_w, sub_col, nsub_cols))
         .collect();
@@ -430,9 +407,9 @@ fn render_sub_grid(
                 glyph_layout(hint, sub_cell_w, sub_cell_h, sub_hint_scale);
             let is_selected = selected == Some((sub_col, sub_row));
             let (bg, text) = if is_selected {
-                (colors().cell_highlight, colors().text_highlight)
+                (colors.cell_highlight, colors.text_highlight)
             } else {
-                (colors().sub_cell_normal, colors().text_first)
+                (colors.sub_cell_normal, colors.text_first)
             };
             c.fill_rect(
                 x + 1,
