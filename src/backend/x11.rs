@@ -86,7 +86,10 @@ impl X11Backend {
             &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
         )?;
 
-        conn.flush().context("flush after map")?;
+        // Paint the captured desktop onto the window immediately so the user
+        // never sees the black background_pixel during grab retries.
+        put_pixels(&conn, window, gc, screen_w, screen_h, depth, &background)?;
+        conn.flush().context("flush after initial paint")?;
 
         // Grab keyboard so all keys go to our overlay.
         // Retry briefly: on GNOME the compositor may still hold the grab when
@@ -197,32 +200,15 @@ impl Backend for X11Backend {
             // a == 0: keep background as-is
         }
 
-        // X11 has a maximum request size, so split into row bands.
-        let stride = (width * 4) as usize;
-        let max_data = self.conn.maximum_request_bytes() - 32;
-        let rows_per_chunk = (max_data / stride).max(1) as u32;
-
-        let mut y = 0u32;
-        while y < height {
-            let chunk_h = rows_per_chunk.min(height - y);
-            let start = (y as usize) * stride;
-            let end = start + (chunk_h as usize) * stride;
-            self.conn
-                .put_image(
-                    ImageFormat::Z_PIXMAP,
-                    self.window,
-                    self.gc,
-                    width as u16,
-                    chunk_h as u16,
-                    0,
-                    y as i16,
-                    0,
-                    self.depth,
-                    &composited[start..end],
-                )
-                .context("put_image")?;
-            y += chunk_h;
-        }
+        put_pixels(
+            &self.conn,
+            self.window,
+            self.gc,
+            width,
+            height,
+            self.depth,
+            &composited,
+        )?;
         self.conn.flush().context("flush after present")?;
         Ok(())
     }
@@ -401,6 +387,44 @@ fn grab_keyboard_with_retry(conn: &RustConnection, window: Window) -> Result<()>
         }
     }
     anyhow::bail!("failed to grab keyboard after {ATTEMPTS} attempts")
+}
+
+/// Send a pixel buffer to a window via chunked put_image requests.
+/// X11 has a maximum request size, so we split into row bands.
+fn put_pixels(
+    conn: &RustConnection,
+    window: Window,
+    gc: Gcontext,
+    width: u32,
+    height: u32,
+    depth: u8,
+    pixels: &[u8],
+) -> Result<()> {
+    let stride = (width * 4) as usize;
+    let max_data = conn.maximum_request_bytes() - 32;
+    let rows_per_chunk = (max_data / stride).max(1) as u32;
+
+    let mut y = 0u32;
+    while y < height {
+        let chunk_h = rows_per_chunk.min(height - y);
+        let start = (y as usize) * stride;
+        let end = start + (chunk_h as usize) * stride;
+        conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            window,
+            gc,
+            width as u16,
+            chunk_h as u16,
+            0,
+            y as i16,
+            0,
+            depth,
+            &pixels[start..end],
+        )
+        .context("put_image")?;
+        y += chunk_h;
+    }
+    Ok(())
 }
 
 /// Capture the root window contents as a BGRA pixel buffer.
