@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::*;
@@ -84,18 +86,15 @@ impl X11Backend {
             &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
         )?;
 
-        conn.flush().context("flush after map")?;
+        // Paint the captured desktop onto the window immediately so the user
+        // never sees the black background_pixel during grab retries.
+        put_pixels(&conn, window, gc, screen_w, screen_h, depth, &background)?;
+        conn.flush().context("flush after initial paint")?;
 
-        // Grab keyboard so all keys go to our overlay
-        let grab = conn
-            .grab_keyboard(true, window, CURRENT_TIME, GrabMode::ASYNC, GrabMode::ASYNC)
-            .context("grab keyboard request")?
-            .reply()
-            .context("grab keyboard reply")?;
-
-        if grab.status != GrabStatus::SUCCESS {
-            anyhow::bail!("failed to grab keyboard: {:?}", grab.status);
-        }
+        // Grab keyboard so all keys go to our overlay.
+        // Retry briefly: on GNOME the compositor may still hold the grab when
+        // we first try (e.g. from the shortcut key-release event).
+        grab_keyboard_with_retry(&conn, window).context("grab keyboard")?;
 
         Ok(X11Backend {
             conn,
@@ -201,32 +200,15 @@ impl Backend for X11Backend {
             // a == 0: keep background as-is
         }
 
-        // X11 has a maximum request size, so split into row bands.
-        let stride = (width * 4) as usize;
-        let max_data = self.conn.maximum_request_bytes() - 32;
-        let rows_per_chunk = (max_data / stride).max(1) as u32;
-
-        let mut y = 0u32;
-        while y < height {
-            let chunk_h = rows_per_chunk.min(height - y);
-            let start = (y as usize) * stride;
-            let end = start + (chunk_h as usize) * stride;
-            self.conn
-                .put_image(
-                    ImageFormat::Z_PIXMAP,
-                    self.window,
-                    self.gc,
-                    width as u16,
-                    chunk_h as u16,
-                    0,
-                    y as i16,
-                    0,
-                    self.depth,
-                    &composited[start..end],
-                )
-                .context("put_image")?;
-            y += chunk_h;
-        }
+        put_pixels(
+            &self.conn,
+            self.window,
+            self.gc,
+            width,
+            height,
+            self.depth,
+            &composited,
+        )?;
         self.conn.flush().context("flush after present")?;
         Ok(())
     }
@@ -376,26 +358,73 @@ impl Backend for X11Backend {
             .context("raise window")?;
         self.conn.flush().context("flush after remap")?;
 
-        let grab = self
-            .conn
-            .grab_keyboard(
-                true,
-                self.window,
-                CURRENT_TIME,
-                GrabMode::ASYNC,
-                GrabMode::ASYNC,
-            )
-            .context("regrab keyboard")?
-            .reply()
-            .context("regrab keyboard reply")?;
-
-        if grab.status != GrabStatus::SUCCESS {
-            anyhow::bail!("failed to regrab keyboard: {:?}", grab.status);
-        }
+        grab_keyboard_with_retry(&self.conn, self.window).context("regrab keyboard")?;
 
         self.mapped = true;
         Ok(())
     }
+}
+
+/// Try to grab the keyboard, retrying for up to ~500 ms.
+/// On GNOME and some other compositors the shortcut key-release event may
+/// still be in flight when we first attempt the grab, causing ALREADY_GRABBED.
+fn grab_keyboard_with_retry(conn: &RustConnection, window: Window) -> Result<()> {
+    const ATTEMPTS: u32 = 10;
+    const DELAY_MS: u64 = 50;
+
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(DELAY_MS));
+        }
+        let status = conn
+            .grab_keyboard(true, window, CURRENT_TIME, GrabMode::ASYNC, GrabMode::ASYNC)
+            .context("grab keyboard request")?
+            .reply()
+            .context("grab keyboard reply")?
+            .status;
+        if status == GrabStatus::SUCCESS {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("failed to grab keyboard after {ATTEMPTS} attempts")
+}
+
+/// Send a pixel buffer to a window via chunked put_image requests.
+/// X11 has a maximum request size, so we split into row bands.
+fn put_pixels(
+    conn: &RustConnection,
+    window: Window,
+    gc: Gcontext,
+    width: u32,
+    height: u32,
+    depth: u8,
+    pixels: &[u8],
+) -> Result<()> {
+    let stride = (width * 4) as usize;
+    let max_data = conn.maximum_request_bytes() - 32;
+    let rows_per_chunk = (max_data / stride).max(1) as u32;
+
+    let mut y = 0u32;
+    while y < height {
+        let chunk_h = rows_per_chunk.min(height - y);
+        let start = (y as usize) * stride;
+        let end = start + (chunk_h as usize) * stride;
+        conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            window,
+            gc,
+            width as u16,
+            chunk_h as u16,
+            0,
+            y as i16,
+            0,
+            depth,
+            &pixels[start..end],
+        )
+        .context("put_image")?;
+        y += chunk_h;
+    }
+    Ok(())
 }
 
 /// Capture the root window contents as a BGRA pixel buffer.
