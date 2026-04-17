@@ -1,3 +1,4 @@
+mod bisect;
 mod macro_bind_key;
 mod macro_name;
 mod macro_replay;
@@ -44,6 +45,9 @@ pub enum Mode {
         target: Option<(u32, u32)>,
         drag_origin: Option<(u32, u32)>,
     },
+    Bisect {
+        region: (u32, u32, u32, u32),
+    },
     MacroRecording {
         input_state: InputState,
         target: Option<(u32, u32)>,
@@ -89,6 +93,7 @@ impl Mode {
                 *target,
                 *drag_origin,
             ),
+            Mode::Bisect { region } => bisect::handle_key(key, backend, *region),
             Mode::MacroRecording {
                 input_state,
                 target,
@@ -142,6 +147,7 @@ impl Mode {
                 input_state,
                 drag_origin.is_some(),
             ),
+            Mode::Bisect { region } => bisect::draw(backend, pixels, width, height, *region),
             Mode::MacroRecording {
                 input_state,
                 drag_origin,

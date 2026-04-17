@@ -182,6 +182,9 @@ pub(super) fn handle_key<B: Backend>(
             backend.scroll_right()?;
             Ok(ModeTransition::Redraw)
         }
+        KeyEvent::Bisect => Ok(ModeTransition::Enter(Mode::Bisect {
+            region: (0, 0, width, height),
+        })),
         _ => Ok(ModeTransition::Stay),
     }
 }

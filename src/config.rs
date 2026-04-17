@@ -202,6 +202,8 @@ impl Default for GridConfig {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KeyBindings {
+    pub normal: Key,
+    pub bisect: Key,
     pub click: Key,
     pub double_click: Key,
     pub close: Key,
@@ -218,6 +220,8 @@ pub struct KeyBindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
+            normal: Key::Char('n'),
+            bisect: Key::Char('b'),
             click: Key::Space,
             double_click: Key::Enter,
             close: Key::Escape,
@@ -237,6 +241,12 @@ impl KeyBindings {
     /// Look up whether a Key is bound to an action. Returns the corresponding
     /// KeyEvent if bound, or None if the key is not an action binding.
     pub fn to_event(&self, key: Key) -> Option<KeyEvent> {
+        if key == self.normal {
+            return Some(KeyEvent::Normal);
+        }
+        if key == self.bisect {
+            return Some(KeyEvent::Bisect);
+        }
         if key == self.click {
             return Some(KeyEvent::Click);
         }
@@ -373,8 +383,29 @@ impl Default for Colors {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
+pub struct BisectConfig {
+    pub hints: Vec<char>,
+    pub rows: u32,
+    pub cols: u32,
+    pub min_cell_size: u32,
+}
+
+impl Default for BisectConfig {
+    fn default() -> Self {
+        Self {
+            hints: vec!['a', 's', 'd', 'f'],
+            rows: 2,
+            cols: 2,
+            min_cell_size: 16,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub grid: GridConfig,
+    pub bisect: BisectConfig,
     pub keys: KeyBindings,
     pub colors: Colors,
     pub font_size: u32,
@@ -386,6 +417,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             grid: GridConfig::default(),
+            bisect: BisectConfig::default(),
             keys: KeyBindings::default(),
             colors: Colors::default(),
             font_size: 2,
