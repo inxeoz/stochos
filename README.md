@@ -75,8 +75,28 @@ bindsym Super_L exec stochos
 | `` ` `` | Toggle macro recording |
 | `@` | Replay macro by bind key |
 | Tab | Search macros / quick-save position |
+| `b` | Switch to bisect mode |
+| `n` | Switch back to normal mode (from bisect) |
 
 All keys are configurable (see Configuration below).
+
+### CLI flags
+
+| Flag | Effect |
+|------|--------|
+| `--bisect` | Start the overlay directly in bisect mode |
+| `--allow-multiple` | Skip the single-instance lock |
+
+### Bisect mode
+
+An alternative grid mode that recursively subdivides. Instead of two-key combos and a sub-grid, each hint press zooms the grid into the cell you chose, re-rendering a fresh grid inside that region. Keep pressing hints to home in, then click.
+
+- Enter bisect mode: press `b` from normal mode, or launch with `--bisect`
+- Each hint key splits the current region into a smaller grid (2x2 by default)
+- Space / Enter / Delete act (click / double-click / right-click) at the center of the current region and exit
+- Backspace pops back up one level
+- Subdivision stops automatically once a cell would fall below `min_cell_size` pixels — the region is highlighted and you can act or back out
+- Press `n` to switch back to normal mode
 
 ### Macros
 
@@ -105,7 +125,15 @@ sub_hints = ["a", "s", "d", "f", "j", "k", "l", ";", "g", "h", "q", "w", "e", "r
 sub_cols = 5
 target_cell_size = 90  # Enable dynamic grid by setting this value
 
+[bisect]
+hints = ["a", "s", "d", "f"]  # One per cell, row-major (length must be >= rows * cols)
+rows = 2
+cols = 2
+min_cell_size = 16  # Stop subdividing once a cell would be smaller than this, in pixels
+
 [keys]
+normal = "n"
+bisect = "b"
 click = "space"
 double_click = "enter"
 close = "escape"
@@ -117,9 +145,6 @@ scroll_left = "left"
 scroll_right = "right"
 macro_menu = "tab"
 macro_record = "`"
-
-
-
 
 [colors]
 # Grid colors - Maximum visibility in all conditions
@@ -139,7 +164,6 @@ selected_bg = "#2196f3ff"        # Material Design Blue (works in light/dark)
 rec_bg = "#f44336ff"             # Material Design Red (urgent, visible everywhere)
 border = "#00e676ff"             # Material Green (fresh, visible)
 border_dragging = "#e91e63ff"    # Material Pink (strong attention grabber)
-
 ```
 
 ### Font
@@ -154,6 +178,12 @@ border_dragging = "#e91e63ff"    # Material Pink (strong attention grabber)
 - `hints` sets the characters for the main grid. Grid size is `len(hints) x len(hints)` (default 20x20 = 400 cells).
 - `sub_hints` sets the characters for the sub-grid. Sub-grid size is `sub_cols x (len(sub_hints) / sub_cols)` (default 5x5 = 25 cells).
 - `sub_cols` sets how many columns the sub-grid has.
+
+### Bisect
+
+- `hints` sets the characters for each bisect cell, in row-major order. Must contain at least `rows * cols` entries; extras are ignored.
+- `rows` and `cols` set the grid shape used at every subdivision level (default 2x2).
+- `min_cell_size` is the pixel floor at which subdivision stops. The glyph scale auto-shrinks to fit the cell, so lowering this lets you reach tiny regions.
 
 ### Keys
 
