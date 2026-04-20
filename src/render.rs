@@ -130,6 +130,70 @@ pub fn render_grid(buf: &mut [u8], w: u32, h: u32, input: &InputState, dragging:
     }
 }
 
+pub fn render_bisect(buf: &mut [u8], w: u32, h: u32, region: (u32, u32, u32, u32)) {
+    let cfg = config();
+    let bcfg = &cfg.bisect;
+    let rows = bcfg.rows.max(1);
+    let cols = bcfg.cols.max(1);
+    let (rx, ry, rw, rh) = region;
+    let colors = &cfg.colors;
+    let mut c = Canvas { buf, w };
+    c.clear();
+
+    let rx = rx.min(w);
+    let ry = ry.min(h);
+    let rw = rw.min(w.saturating_sub(rx));
+    let rh = rh.min(h.saturating_sub(ry));
+    if rw == 0 || rh == 0 {
+        return;
+    }
+
+    let sub_w_approx = rw / cols;
+    let sub_h_approx = rh / rows;
+    let can_split = sub_w_approx >= bcfg.min_cell_size && sub_h_approx >= bcfg.min_cell_size;
+
+    if !can_split {
+        c.fill_rect(rx, ry, rw, rh, colors.cell_highlight);
+        c.fill_rect(rx, ry, rw, 1, colors.border);
+        c.fill_rect(rx, ry + rh - 1, rw, 1, colors.border);
+        c.fill_rect(rx, ry, 1, rh, colors.border);
+        c.fill_rect(rx + rw - 1, ry, 1, rh, colors.border);
+        return;
+    }
+
+    let scale = cfg.font_size();
+    let col_spans: Vec<_> = (0..cols)
+        .map(|col| subdivide_span(rx, rw, col, cols))
+        .collect();
+    let row_spans: Vec<_> = (0..rows)
+        .map(|row| subdivide_span(ry, rh, row, rows))
+        .collect();
+
+    for row in 0..rows {
+        for col in 0..cols {
+            let (x, sub_w) = col_spans[col as usize];
+            let (y, sub_h) = row_spans[row as usize];
+            let Some(&hint) = bcfg.hints.get((row * cols + col) as usize) else {
+                continue;
+            };
+            c.fill_rect(
+                x + 1,
+                y + 1,
+                sub_w.saturating_sub(2),
+                sub_h.saturating_sub(2),
+                colors.cell_normal,
+            );
+            let (gs, ox, oy) = glyph_layout(hint, sub_w, sub_h, scale);
+            c.draw_glyph(x + ox, y + oy, hint, colors.text_first, gs);
+        }
+    }
+
+    c.fill_rect(rx, ry, rw, 1, colors.border);
+    c.fill_rect(rx, ry + rh - 1, rw, 1, colors.border);
+    c.fill_rect(rx, ry, 1, rh, colors.border);
+    c.fill_rect(rx + rw - 1, ry, 1, rh, colors.border);
+}
+
 pub fn render_rec_indicator(buf: &mut [u8], w: u32) {
     let cfg = config();
     let scale = cfg.font_size();

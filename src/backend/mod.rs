@@ -2,6 +2,8 @@ use anyhow::Result;
 
 /// A decoded key event, platform-agnostic.
 pub enum KeyEvent {
+    Normal,
+    Bisect,
     Char(char),
     Click,
     DoubleClick,
