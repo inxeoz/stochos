@@ -3,6 +3,13 @@ name = "stochos"
 version = "0.3.5"
 edition = "2021"
 license = "GPL-3.0-or-later"
+description = "Keyboard-driven mouse control"
+repository = "https://github.com/museslabs/stochos"
+homepage = "https://github.com/museslabs/stochos"
+readme = "README.md"
+keywords = ["wayland", "hyprland", "mouse", "keyboard", "accessibility"]
+categories = ["accessibility"]
+exclude = ["example.gif", "target/*", "nix/*", "flake.*", "shell.nix", "install.sh", "todo.md", "CLAUDE.md", ".github/*", ".claude/*"]
 
 [features]
 default = ["wayland", "x11"]
